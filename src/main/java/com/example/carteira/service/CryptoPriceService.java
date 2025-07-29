@@ -6,7 +6,10 @@ import java.util.Random;
 
 @Service
 public class CryptoPriceService {
-
+    private final WebClient webClient;
+    // Cache para armazenar os últimos preços conhecidos
+    private final ConcurrentHashMap<String, BigDecimal> priceCache = new ConcurrentHashMap<>();
+    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
 
     public BigDecimal getCurrentPrice(String ticker) {
         System.out.println("SIMULATING price lookup for: " + ticker);
