@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-em">
+    <title>Portfolio Cripto em Tempo Real</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; }
+        .crypto-card { border: 1px solid #ccc; border-radius: 8px; padding: 15px; margin-bottom: 10px; width: 250px; }
+        .crypto-card h2 { margin-top: 0; }
+        .price { font-size: 24px; font-weight: bold; color: #2a9d8f; }
+        #connection-status { font-style: italic; color: #888; }
+    </style>
+</head>
+<body>
+<h1>Cotações em Tempo Real</h1>
+<p id="connection-status">Conectando...</p>
+
+<div class="crypto-card">
+    <h2>Bitcoin (BTC)</h2>
+    <p class="price" id="btc-price">Carregando...</p>
+</div>
+
+<div class="crypto-card">
+    <h2>Ethereum (ETH)</h2>
+    <p class="price" id="eth-price">Carregando...</p>
+</div>
+
+<!-- Bibliotecas para WebSocket STOMP -->
+<script src="https://cdn.jsdelivr.net/npm/sockjs-client@1.5.1/dist/sockjs.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/stompjs@2.3.3/lib/stomp.min.js"></script>
+<!-- Nosso script customizado -->
+<script src="/app.js"></script>
+</body>
+</html>
