@@ -16,10 +16,10 @@ import java.math.BigDecimal;
 @Setter
 public class Crypto extends Asset {
 
-    @Column(nullable = false)
+    @Column(nullable = true)
     private String ticker; // E.g., "BTC", "ETH"
 
-    @Column(nullable = false)
+    @Column(nullable = true)
     private BigDecimal quantity;
 
 

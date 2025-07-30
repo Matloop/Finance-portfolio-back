@@ -3,23 +3,26 @@ package com.example.carteira.model.assets;
 import com.example.carteira.model.Asset;
 import com.example.carteira.model.enums.FixedIncomeIndex;
 import jakarta.persistence.*;
+import lombok.Getter;
+import lombok.Setter;
+
 import java.math.BigDecimal;
+import java.time.LocalDate;
 
 @Entity
-@DiscriminatorValue("FIXED_INCOME") // Value to be inserted into the ASSET_TYPE column
+@DiscriminatorValue("FIXED_INCOME")
+@Getter
+@Setter
 public class FixedIncome extends Asset {
 
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false)
+    @Column(nullable = true)
     private FixedIncomeIndex indexType;
 
-    // The contracted rate. E.g., 10.5 (for 10.5% p.a.) or 110 (for 110% of CDI)
-    @Column(nullable = false)
+    @Column(nullable = true)
     private BigDecimal contractedRate;
 
-    // Getters and Setters
-    public FixedIncomeIndex getIndexType() { return indexType; }
-    public void setIndexType(FixedIncomeIndex indexType) { this.indexType = indexType; }
-    public BigDecimal getContractedRate() { return contractedRate; }
-    public void setContractedRate(BigDecimal contractedRate) { this.contractedRate = contractedRate; }
+    // NOVO CAMPO: Essencial para cálculos de IR e para saber quando o título vence.
+    @Column(nullable = true) // Pode ser nulo para títulos sem vencimento (raro, mas possível).
+    private LocalDate maturityDate;
 }
