@@ -1,120 +1,113 @@
 package com.example.carteira.service;
 
-import com.example.carteira.model.Asset;
-import com.example.carteira.model.assets.Crypto;
-import com.example.carteira.model.assets.FixedIncome;
-import com.example.carteira.model.dtos.CreateCryptoDto;
-import com.example.carteira.model.dtos.CreateFixedIncomeDto;
-import com.example.carteira.model.dtos.DetailedAssetDto;
-import com.example.carteira.repository.AssetRepository;
-import org.springframework.beans.factory.annotation.Autowired;
+import com.example.carteira.model.Transaction;
+import com.example.carteira.model.dtos.AssetPositionDto;
+import com.example.carteira.model.enums.TransactionType;
+import com.example.carteira.repository.TransactionRepository;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.time.LocalDate;
-import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 @Service
 public class PortfolioService {
 
-    @Autowired
-    private AssetRepository assetRepository;
+    private final TransactionRepository transactionRepository;
+    private final MarketDataService marketDataService;
+    private final FixedIncomeService fixedIncomeService;
 
-    @Autowired
-    private CryptoPriceService cryptoPriceService;
-
-    @Autowired
-    private FixedIncomeCalculationService fixedIncomeCalculationService;
-
-    public List<DetailedAssetDto> getDetailedPortfolio() {
-        List<Asset> assets = assetRepository.findAll();
-        List<DetailedAssetDto> dtos = new ArrayList<>();
-
-        for (Asset asset : assets) {
-            DetailedAssetDto dto = new DetailedAssetDto();
-            dto.setId(asset.getId());
-            dto.setName(asset.getName());
-            dto.setInvestedAmount(asset.getInvestedAmount());
-
-            if (asset instanceof Crypto) {
-                Crypto crypto = (Crypto) asset;
-                dto.setType("Crypto");
-                BigDecimal currentPrice = cryptoPriceService.getCurrentPrice(crypto.getTicker());
-                BigDecimal grossValue = currentPrice.multiply(crypto.getQuantity());
-
-                // Cripto não tem IR na fonte como Renda Fixa, então bruto = líquido por enquanto.
-                dto.setGrossValue(grossValue.setScale(2, RoundingMode.HALF_UP));
-                dto.setNetValue(grossValue.setScale(2, RoundingMode.HALF_UP));
-                dto.setIncomeTax(BigDecimal.ZERO);
-
-            } else if (asset instanceof FixedIncome) {
-                FixedIncome fixedIncome = (FixedIncome) asset;
-                dto.setType("Fixed Income");
-
-                // Chama o serviço que agora retorna todos os valores
-                FixedIncomeCalculationService.CalculationResult result = fixedIncomeCalculationService.calculateValues(fixedIncome);
-
-                dto.setGrossValue(result.grossValue().setScale(2, RoundingMode.HALF_UP));
-                dto.setNetValue(result.netValue().setScale(2, RoundingMode.HALF_UP));
-                dto.setIncomeTax(result.incomeTax().setScale(2, RoundingMode.HALF_UP));
-            }
-
-            // Cálculos finais de lucro e rentabilidade baseados no valor LÍQUIDO
-            BigDecimal netProfit = dto.getNetValue().subtract(dto.getInvestedAmount());
-            dto.setNetProfit(netProfit.setScale(2, RoundingMode.HALF_UP));
-
-            if (dto.getInvestedAmount().compareTo(BigDecimal.ZERO) != 0) {
-                BigDecimal profitability = netProfit.divide(dto.getInvestedAmount(), 4, RoundingMode.HALF_UP)
-                        .multiply(new BigDecimal("100"));
-                dto.setProfitability(profitability.setScale(2, RoundingMode.HALF_UP));
-            } else {
-                dto.setProfitability(BigDecimal.ZERO);
-            }
-
-            dtos.add(dto);
-        }
-        return dtos;
-    }
-
-    public Asset addCrypto(CreateCryptoDto dto) {
-        Crypto crypto = new Crypto();
-        crypto.setTicker(dto.getTicker().toUpperCase());
-        crypto.setQuantity(dto.getQuantity());
-        crypto.setInvestedAmount(dto.getInvestedAmount());
-
-        // Se o nome não for fornecido, usa o ticker como nome.
-        crypto.setName(dto.getName() != null && !dto.getName().isBlank() ? dto.getName() : dto.getTicker().toUpperCase());
-
-        // Define a data de investimento como a data atual.
-        crypto.setInvestmentDate(LocalDate.now());
-
-        // Salva a nova entidade no banco de dados.
-        return assetRepository.save(crypto);
+    public PortfolioService(TransactionRepository transactionRepository,
+                            MarketDataService marketDataService,
+                            FixedIncomeService fixedIncomeService) {
+        this.transactionRepository = transactionRepository;
+        this.marketDataService = marketDataService;
+        this.fixedIncomeService = fixedIncomeService;
     }
 
     /**
-     * Remove um ativo do portfólio pelo seu ID.
+     * Ponto de entrada principal para o frontend.
+     * Busca as posições de todos os tipos de ativos e as unifica em uma única lista.
+     * @return Uma lista de AssetPositionDto representando o portfólio completo.
      */
-    public void deleteAsset(Long assetId) {
-        // Verifica se o ativo existe antes de tentar deletar.
-        if (!assetRepository.existsById(assetId)) {
-            // Em um app real, você lançaria uma exceção mais específica.
-            throw new IllegalArgumentException("Ativo com ID " + assetId + " não encontrado.");
-        }
-        assetRepository.deleteById(assetId);
+    public List<AssetPositionDto> getConsolidatedPortfolio() {
+        // 1. Busca e processa os ativos transacionais (Ações e Cripto)
+        Stream<AssetPositionDto> transactionalAssetsStream = transactionRepository.findDistinctTickers().stream()
+                .map(this::consolidateTicker)
+                .filter(Objects::nonNull);
+
+        // 2. Busca e processa os ativos de Renda Fixa
+        Stream<AssetPositionDto> fixedIncomeAssetsStream = fixedIncomeService.getAllFixedIncomePositions().stream();
+
+        // 3. Concatena os dois fluxos de dados em uma lista única e a retorna
+        return Stream.concat(transactionalAssetsStream, fixedIncomeAssetsStream)
+                .collect(Collectors.toList());
     }
 
-    public Asset addFixedIncome(CreateFixedIncomeDto dto) {
-        FixedIncome fixedIncome = new FixedIncome();
-        fixedIncome.setName(dto.getName());
-        fixedIncome.setInvestedAmount(dto.getInvestedAmount());
-        fixedIncome.setInvestmentDate(dto.getInvestmentDate());
-        fixedIncome.setMaturityDate(dto.getMaturityDate());
-        fixedIncome.setIndexType(dto.getIndexType());
-        fixedIncome.setContractedRate(dto.getContractedRate());
-        return assetRepository.save(fixedIncome);
+    /**
+     * Consolida todas as transações de um ticker (Ação ou Cripto) em uma única posição.
+     * @param ticker O ticker a ser consolidado (ex: "PETR4", "BTC").
+     * @return Um AssetPositionDto com a posição atual, ou null se a quantidade for zerada.
+     */
+    private AssetPositionDto consolidateTicker(String ticker) {
+        List<Transaction> transactions = transactionRepository.findByTickerOrderByTransactionDateAsc(ticker);
+        if (transactions.isEmpty()) {
+            return null;
+        }
+
+        BigDecimal totalQuantity = BigDecimal.ZERO;
+        BigDecimal totalCost = BigDecimal.ZERO;
+
+        // Itera sobre o histórico de transações para calcular a posição atual
+        for (Transaction t : transactions) {
+            if (t.getTransactionType() == TransactionType.BUY) {
+                totalQuantity = totalQuantity.add(t.getQuantity());
+                totalCost = totalCost.add(t.getQuantity().multiply(t.getPricePerUnit()));
+            } else { // Venda (SELL)
+                totalQuantity = totalQuantity.subtract(t.getQuantity());
+            }
+        }
+
+        // Se a quantidade final for zero ou negativa, o ativo não está mais na carteira
+        if (totalQuantity.compareTo(BigDecimal.ZERO) <= 0) {
+            return null;
+        }
+
+        // Calcula o preço médio ponderado
+        BigDecimal averagePrice = totalCost.compareTo(BigDecimal.ZERO) == 0 ?
+                BigDecimal.ZERO :
+                totalCost.divide(totalQuantity, 4, RoundingMode.HALF_UP);
+
+        // Busca o preço de mercado atual
+        BigDecimal currentPrice = marketDataService.getPrice(ticker);
+        BigDecimal currentValue = currentPrice.multiply(totalQuantity);
+        BigDecimal profitOrLoss = currentValue.subtract(totalCost);
+        BigDecimal profitability = totalCost.compareTo(BigDecimal.ZERO) == 0 ?
+                BigDecimal.ZERO :
+                profitOrLoss.divide(totalCost, 4, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100));
+
+        // Monta o DTO de resposta
+        AssetPositionDto position = new AssetPositionDto();
+
+        // Para ativos transacionais, não há um ID único de "posição".
+        // Podemos deixar o ID nulo ou usar um ID de transação se o frontend precisar para algo.
+        // O mais seguro é deixar nulo e usar o ticker como identificador único.
+        position.setTicker(ticker);
+
+        // *** A CORREÇÃO PRINCIPAL ESTÁ AQUI ***
+        // Convertendo o Enum para uma String para corresponder ao DTO e ao que o FixedIncomeService produz.
+        position.setAssetType(transactions.get(0).getAssetType().name());
+
+        position.setTotalQuantity(totalQuantity);
+        position.setAveragePrice(averagePrice);
+        position.setTotalInvested(totalCost);
+        position.setCurrentValue(currentValue.setScale(2, RoundingMode.HALF_UP));
+        position.setProfitOrLoss(profitOrLoss.setScale(2, RoundingMode.HALF_UP));
+        position.setProfitability(profitability.setScale(2, RoundingMode.HALF_UP));
+
+        return position;
     }
 }
