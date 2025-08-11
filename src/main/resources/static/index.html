@@ -23,6 +23,11 @@
         .asset-card p { margin: 8px 0; display: flex; justify-content: space-between; }
         .profit { color: #28a745; font-weight: bold; }
         .loss { color: #dc3545; font-weight: bold; }
+
+        /* Estilos para o cabeçalho com botão */
+        .header-with-button { display: flex; justify-content: space-between; align-items: center; }
+        .refresh-button { width: auto; font-size: 14px; padding: 8px 12px; background-color: #27ae60; }
+        .refresh-button:disabled { background-color: #95a5a6; cursor: not-allowed; }
     </style>
 </head>
 <body>
@@ -60,7 +65,10 @@
     </div>
 
     <div class="card">
-        <h2>Posição Consolidada</h2>
+        <div class="header-with-button">
+            <h2>Posição Consolidada</h2>
+            <button id="refresh-btn" class="refresh-button">Atualizar Cotações</button>
+        </div>
         <div id="portfolio-list"><p>Carregando...</p></div>
     </div>
 </div>

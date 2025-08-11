@@ -1,24 +1,35 @@
 package com.example.carteira.controller;
 
+import com.example.carteira.model.Transaction;
 import com.example.carteira.model.dtos.AssetPositionDto;
+import com.example.carteira.model.dtos.TransactionRequest;
+import com.example.carteira.service.MarketDataService;
 import com.example.carteira.service.PortfolioService;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/portfolio")
 public class PortfolioController {
     private final PortfolioService portfolioService;
+    private final MarketDataService marketDataService;
 
-    public PortfolioController(PortfolioService portfolioService) {
+    public PortfolioController(PortfolioService portfolioService, MarketDataService marketDataService) {
         this.portfolioService = portfolioService;
+        this.marketDataService = marketDataService;
     }
 
     @GetMapping
     public List<AssetPositionDto> getConsolidatedPortfolio() {
         return portfolioService.getConsolidatedPortfolio();
+    }
+
+    @PostMapping("/refresh")
+    public ResponseEntity<Map<String, String>> refreshData() {
+        marketDataService.refreshAllMarketData();
+        return ResponseEntity.ok(Map.of("message", "A atualização dos dados de mercado foi iniciada."));
     }
 }

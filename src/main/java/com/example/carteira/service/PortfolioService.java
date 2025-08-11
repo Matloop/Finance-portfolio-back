@@ -2,12 +2,14 @@ package com.example.carteira.service;
 
 import com.example.carteira.model.Transaction;
 import com.example.carteira.model.dtos.AssetPositionDto;
+import com.example.carteira.model.dtos.TransactionRequest;
 import com.example.carteira.model.enums.TransactionType;
 import com.example.carteira.repository.TransactionRepository;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
@@ -29,28 +31,46 @@ public class PortfolioService {
     }
 
     /**
+     * NOVO MÉTODO: Adiciona uma transação e busca o preço do ativo imediatamente.
+     */
+    public Transaction addTransaction(TransactionRequest request) {
+        Transaction transaction = new Transaction();
+        transaction.setTicker(request.ticker().toUpperCase());
+        transaction.setAssetType(request.assetType());
+        transaction.setTransactionType(request.transactionType());
+        transaction.setQuantity(request.quantity());
+        transaction.setPricePerUnit(request.pricePerUnit());
+        transaction.setTransactionDate(LocalDate.now());
+
+        Transaction savedTransaction = transactionRepository.save(transaction);
+
+        // ATUALIZAÇÃO AUTOMÁTICA AO ADICIONAR UM NOVO ATIVO:
+        // Chama o MarketDataService para buscar o preço do novo ativo imediatamente.
+        marketDataService.updatePriceForTickers(
+                List.of(savedTransaction.getTicker()),
+                savedTransaction.getAssetType()
+        );
+
+        return savedTransaction;
+    }
+
+    /**
      * Ponto de entrada principal para o frontend.
      * Busca as posições de todos os tipos de ativos e as unifica em uma única lista.
-     * @return Uma lista de AssetPositionDto representando o portfólio completo.
      */
     public List<AssetPositionDto> getConsolidatedPortfolio() {
-        // 1. Busca e processa os ativos transacionais (Ações e Cripto)
         Stream<AssetPositionDto> transactionalAssetsStream = transactionRepository.findDistinctTickers().stream()
                 .map(this::consolidateTicker)
                 .filter(Objects::nonNull);
 
-        // 2. Busca e processa os ativos de Renda Fixa
         Stream<AssetPositionDto> fixedIncomeAssetsStream = fixedIncomeService.getAllFixedIncomePositions().stream();
 
-        // 3. Concatena os dois fluxos de dados em uma lista única e a retorna
         return Stream.concat(transactionalAssetsStream, fixedIncomeAssetsStream)
                 .collect(Collectors.toList());
     }
 
     /**
      * Consolida todas as transações de um ticker (Ação ou Cripto) em uma única posição.
-     * @param ticker O ticker a ser consolidado (ex: "PETR4", "BTC").
-     * @return Um AssetPositionDto com a posição atual, ou null se a quantidade for zerada.
      */
     private AssetPositionDto consolidateTicker(String ticker) {
         List<Transaction> transactions = transactionRepository.findByTickerOrderByTransactionDateAsc(ticker);
@@ -60,50 +80,44 @@ public class PortfolioService {
 
         BigDecimal totalQuantity = BigDecimal.ZERO;
         BigDecimal totalCost = BigDecimal.ZERO;
+        BigDecimal totalBuyQuantity = BigDecimal.ZERO; // Precisamos da quantidade total comprada para o preço médio
 
-        // Itera sobre o histórico de transações para calcular a posição atual
         for (Transaction t : transactions) {
             if (t.getTransactionType() == TransactionType.BUY) {
+                BigDecimal costOfThisTransaction = t.getQuantity().multiply(t.getPricePerUnit());
+                totalCost = totalCost.add(costOfThisTransaction);
                 totalQuantity = totalQuantity.add(t.getQuantity());
-                totalCost = totalCost.add(t.getQuantity().multiply(t.getPricePerUnit()));
+                totalBuyQuantity = totalBuyQuantity.add(t.getQuantity());
             } else { // Venda (SELL)
                 totalQuantity = totalQuantity.subtract(t.getQuantity());
             }
         }
 
-        // Se a quantidade final for zero ou negativa, o ativo não está mais na carteira
         if (totalQuantity.compareTo(BigDecimal.ZERO) <= 0) {
             return null;
         }
 
-        // Calcula o preço médio ponderado
-        BigDecimal averagePrice = totalCost.compareTo(BigDecimal.ZERO) == 0 ?
+        BigDecimal averagePrice = totalBuyQuantity.compareTo(BigDecimal.ZERO) == 0 ?
                 BigDecimal.ZERO :
-                totalCost.divide(totalQuantity, 4, RoundingMode.HALF_UP);
+                totalCost.divide(totalBuyQuantity, 4, RoundingMode.HALF_UP);
 
-        // Busca o preço de mercado atual
         BigDecimal currentPrice = marketDataService.getPrice(ticker);
         BigDecimal currentValue = currentPrice.multiply(totalQuantity);
-        BigDecimal profitOrLoss = currentValue.subtract(totalCost);
-        BigDecimal profitability = totalCost.compareTo(BigDecimal.ZERO) == 0 ?
+
+        // O custo total para o cálculo de lucro deve refletir a posição atual
+        BigDecimal currentPositionCost = totalQuantity.multiply(averagePrice);
+        BigDecimal profitOrLoss = currentValue.subtract(currentPositionCost);
+
+        BigDecimal profitability = currentPositionCost.compareTo(BigDecimal.ZERO) == 0 ?
                 BigDecimal.ZERO :
-                profitOrLoss.divide(totalCost, 4, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100));
+                profitOrLoss.divide(currentPositionCost, 4, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100));
 
-        // Monta o DTO de resposta
         AssetPositionDto position = new AssetPositionDto();
-
-        // Para ativos transacionais, não há um ID único de "posição".
-        // Podemos deixar o ID nulo ou usar um ID de transação se o frontend precisar para algo.
-        // O mais seguro é deixar nulo e usar o ticker como identificador único.
         position.setTicker(ticker);
-
-        // *** A CORREÇÃO PRINCIPAL ESTÁ AQUI ***
-        // Convertendo o Enum para uma String para corresponder ao DTO e ao que o FixedIncomeService produz.
         position.setAssetType(transactions.get(0).getAssetType().name());
-
         position.setTotalQuantity(totalQuantity);
         position.setAveragePrice(averagePrice);
-        position.setTotalInvested(totalCost);
+        position.setTotalInvested(currentPositionCost.setScale(2, RoundingMode.HALF_UP));
         position.setCurrentValue(currentValue.setScale(2, RoundingMode.HALF_UP));
         position.setProfitOrLoss(profitOrLoss.setScale(2, RoundingMode.HALF_UP));
         position.setProfitability(profitability.setScale(2, RoundingMode.HALF_UP));
