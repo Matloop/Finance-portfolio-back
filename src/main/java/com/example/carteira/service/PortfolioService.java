@@ -130,16 +130,18 @@ public class PortfolioService {
         //get total heritage
         BigDecimal totalHeritage = BigDecimal.ZERO;
         BigDecimal totalInvested = BigDecimal.ZERO;
-        BigDecimal profitability = BigDecimal.ZERO;
+        BigDecimal profitability;
         for(String t: transactionRepository.findDistinctTickers()){
             if(t != null){
-                totalHeritage.add(this.consolidateTicker(t).getCurrentValue());
-                totalInvested.add(this.consolidateTicker(t).getTotalInvested());
+                totalHeritage = totalHeritage.add((this.consolidateTicker(t)).getCurrentValue());
+                totalInvested = totalInvested.add((this.consolidateTicker(t)).getTotalInvested());
             }
         }
-        if (totalInvested == BigDecimal.ZERO) {
-            profitability = (totalHeritage.subtract(totalInvested)).divide(totalInvested, 4, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100));
+        if (totalInvested.compareTo(BigDecimal.ZERO) <= 0) {
+            return new PortfolioSummaryDto(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
         }
+        profitability = (totalHeritage.subtract(totalInvested)).divide(totalInvested, 4, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100));
+
 
         return new PortfolioSummaryDto(totalHeritage,totalInvested,profitability);
 
