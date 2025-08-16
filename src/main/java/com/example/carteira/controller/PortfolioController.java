@@ -2,6 +2,7 @@ package com.example.carteira.controller;
 
 import com.example.carteira.model.Transaction;
 import com.example.carteira.model.dtos.AssetPositionDto;
+import com.example.carteira.model.dtos.PortfolioSummaryDto;
 import com.example.carteira.model.dtos.TransactionRequest;
 import com.example.carteira.service.MarketDataService;
 import com.example.carteira.service.PortfolioService;
@@ -31,5 +32,9 @@ public class PortfolioController {
     public ResponseEntity<Map<String, String>> refreshData() {
         marketDataService.refreshAllMarketData();
         return ResponseEntity.ok(Map.of("message", "A atualização dos dados de mercado foi iniciada."));
+    }
+    @GetMapping("/summary")
+    public ResponseEntity<PortfolioSummaryDto> getPortfolioSummary() {
+        return ResponseEntity.ok(portfolioService.getPortfolioSummary());
     }
 }

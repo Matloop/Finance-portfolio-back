@@ -2,6 +2,7 @@ package com.example.carteira.service;
 
 import com.example.carteira.model.Transaction;
 import com.example.carteira.model.dtos.AssetPositionDto;
+import com.example.carteira.model.dtos.PortfolioSummaryDto;
 import com.example.carteira.model.dtos.TransactionRequest;
 import com.example.carteira.model.enums.TransactionType;
 import com.example.carteira.repository.TransactionRepository;
@@ -123,5 +124,24 @@ public class PortfolioService {
         position.setProfitability(profitability.setScale(2, RoundingMode.HALF_UP));
 
         return position;
+    }
+
+    public PortfolioSummaryDto getPortfolioSummary() {
+        //get total heritage
+        BigDecimal totalHeritage = BigDecimal.ZERO;
+        BigDecimal totalInvested = BigDecimal.ZERO;
+        BigDecimal profitability = BigDecimal.ZERO;
+        for(String t: transactionRepository.findDistinctTickers()){
+            if(t != null){
+                totalHeritage.add(this.consolidateTicker(t).getCurrentValue());
+                totalInvested.add(this.consolidateTicker(t).getTotalInvested());
+            }
+        }
+        if (totalInvested == BigDecimal.ZERO) {
+            profitability = (totalHeritage.subtract(totalInvested)).divide(totalInvested, 4, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100));
+        }
+
+        return new PortfolioSummaryDto(totalHeritage,totalInvested,profitability);
+
     }
 }
