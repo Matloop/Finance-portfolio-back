@@ -1,6 +1,7 @@
 package com.example.carteira.controller;
 
 import com.example.carteira.model.Transaction;
+import com.example.carteira.model.dtos.AssetPercentage;
 import com.example.carteira.model.dtos.AssetPositionDto;
 import com.example.carteira.model.dtos.PortfolioSummaryDto;
 import com.example.carteira.model.dtos.TransactionRequest;
@@ -36,5 +37,10 @@ public class PortfolioController {
     @GetMapping("/summary")
     public ResponseEntity<PortfolioSummaryDto> getPortfolioSummary() {
         return ResponseEntity.ok(portfolioService.getPortfolioSummary());
+    }
+
+    @GetMapping("/assetPercentage")
+    public ResponseEntity<AssetPercentage> getAssetPercentage() {
+        return ResponseEntity.ok(portfolioService.getAssetPercentage());
     }
 }

@@ -119,4 +119,14 @@ public class FixedIncomeService {
         double finalAmount = asset.getInvestedAmount().doubleValue() * Math.pow(dailyFactor, days);
         return BigDecimal.valueOf(finalAmount);
     }
+
+    public BigDecimal getAllValue() {
+        BigDecimal total = BigDecimal.ZERO;
+         fixedIncomeRepository.findAll().stream()
+                .map(this::calculatePosition)
+                .map(AssetPositionDto::getCurrentValue)
+                 .reduce(total, BigDecimal::add);
+
+         return total;
+    }
 }

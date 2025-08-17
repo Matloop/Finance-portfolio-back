@@ -1,6 +1,7 @@
 package com.example.carteira.service;
 
 import com.example.carteira.model.Transaction;
+import com.example.carteira.model.dtos.AssetPercentage;
 import com.example.carteira.model.dtos.AssetPositionDto;
 import com.example.carteira.model.dtos.PortfolioSummaryDto;
 import com.example.carteira.model.dtos.TransactionRequest;
@@ -12,6 +13,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -144,6 +146,22 @@ public class PortfolioService {
 
 
         return new PortfolioSummaryDto(totalHeritage,totalInvested,profitability);
+    }
+
+    public AssetPercentage getAssetPercentage() {
+        Map<String,BigDecimal> totalsByType = transactionRepository.findDistinctTickers().stream()
+                .map(this::consolidateTicker)
+                .filter(Objects::nonNull)
+                .collect(Collectors.groupingBy(AssetPositionDto::getAssetType, Collectors.reducing(
+                        BigDecimal.ZERO,
+                        AssetPositionDto::getCurrentValue,
+                        BigDecimal::add
+                        )
+                ));
+        BigDecimal totalCripto = totalsByType.get("CRYPTO");
+        BigDecimal totalStock = totalsByType.get("STOCK");
+        BigDecimal totalFixedIncome = fixedIncomeService.getAllValue();
+        return new AssetPercentage(totalCripto,totalStock,totalFixedIncome);
 
     }
 }

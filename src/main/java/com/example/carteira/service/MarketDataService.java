@@ -4,6 +4,7 @@ import com.example.carteira.model.Transaction;
 import com.example.carteira.model.enums.AssetType;
 import com.example.carteira.repository.TransactionRepository;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
@@ -11,11 +12,15 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -24,7 +29,7 @@ import java.util.stream.Collectors;
 
 /**
  * Serviço completo e autocontido para buscar dados de mercado de diferentes fontes.
- * - Ações: Utiliza a API brapi.dev.
+ * - Ações: Utiliza a API alphavantage.co (adaptado da Brapi).
  * - Criptomoedas: Utiliza a API coingecko.com.
  *
  * Funcionalidades:
@@ -37,71 +42,55 @@ public class MarketDataService {
 
     private static final Logger logger = LoggerFactory.getLogger(MarketDataService.class);
 
-    private final WebClient brapiWebClient;
+    // MUDANÇA: WebClient renomeado para refletir a nova API
+    private final WebClient alphaVantageWebClient;
     private final WebClient coingeckoWebClient;
     private final TransactionRepository transactionRepository;
 
-    // Cache para armazenar os preços dos ativos (ticker -> preço)
-    private final Map<String, BigDecimal> priceCache = new ConcurrentHashMap<>();
+    // MUDANÇA: Chave da API da Alpha Vantage
+    private final String alphaVantageApiKey;
 
-    // Agendador para as atualizações periódicas em background
+    private final Map<String, BigDecimal> priceCache = new ConcurrentHashMap<>();
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
 
     /**
      * Construtor que injeta as dependências necessárias e configura os WebClients.
-     * O token da Brapi é lido do arquivo application.properties.
+     * O token da Alpha Vantage é lido do arquivo application.properties.
      */
     public MarketDataService(
             WebClient.Builder webClientBuilder,
             TransactionRepository transactionRepository,
-            @Value("${brapi.token}") String brapiToken) {
+            // MUDANÇA: Injetando a chave da Alpha Vantage
+            @Value("${alphavantage.apikey}") String alphaVantageApiKey) {
 
         this.transactionRepository = transactionRepository;
+        this.alphaVantageApiKey = alphaVantageApiKey;
 
-        // Cliente para a API da Brapi (Ações), com token de autorização
-        this.brapiWebClient = webClientBuilder
-                .baseUrl("https://brapi.dev/api")
-                .defaultHeader("Authorization", "Bearer " + brapiToken)
+        // MUDANÇA: Cliente configurado para a API da Alpha Vantage
+        this.alphaVantageWebClient = webClientBuilder
+                .baseUrl("https://www.alphavantage.co")
                 .build();
 
-        // Cliente para a API do CoinGecko (Criptomoedas)
+        // Cliente para a API do CoinGecko (Criptomoedas) - SEM MUDANÇAS AQUI
         this.coingeckoWebClient = webClientBuilder
                 .baseUrl("https://api.coingecko.com/api/v3")
                 .build();
     }
 
-    /**
-     * Método executado uma vez após a inicialização do serviço.
-     * Inicia a primeira busca de dados e agenda as futuras.
-     */
     @PostConstruct
     private void initialize() {
         logger.info("Iniciando MarketDataService. A primeira busca de dados ocorrerá em 10 segundos.");
-        // A atualização agendada executa a cada 5 minutos (300 segundos)
         scheduler.scheduleAtFixedRate(this::refreshAllMarketData, 10, 300, TimeUnit.SECONDS);
     }
 
-    /**
-     * Retorna o preço de um ativo específico a partir do cache.
-     *
-     * @param ticker O símbolo do ativo (ex: "PETR4", "BTC").
-     * @return O preço em BigDecimal, ou BigDecimal.ZERO se não for encontrado.
-     */
     public BigDecimal getPrice(String ticker) {
         return priceCache.getOrDefault(ticker.toUpperCase(), BigDecimal.ZERO);
     }
 
-    /**
-     * Retorna uma visão somente leitura de todos os preços atualmente no cache.
-     */
     public Map<String, BigDecimal> getAllPrices() {
         return Collections.unmodifiableMap(priceCache);
     }
 
-    /**
-     * Dispara uma atualização completa de todos os ativos existentes na base de dados.
-     * Ideal para ser chamado por um endpoint de "Atualizar".
-     */
     public void refreshAllMarketData() {
         logger.info("ATUALIZAÇÃO GERAL: Iniciando busca de dados para todos os ativos...");
         Map<AssetType, List<String>> tickersByType = transactionRepository.findAll().stream()
@@ -117,13 +106,6 @@ public class MarketDataService {
         });
     }
 
-    /**
-     * Busca e atualiza o preço para uma lista específica de tickers de um determinado tipo.
-     * Ideal para ser chamado logo após a criação de uma nova transação.
-     *
-     * @param tickers   Lista de símbolos dos ativos.
-     * @param assetType O tipo dos ativos (STOCK ou CRYPTO).
-     */
     public void updatePriceForTickers(List<String> tickers, AssetType assetType) {
         logger.info("ATUALIZAÇÃO SOB DEMANDA: Buscando preço para {} ({})", tickers, assetType);
         switch (assetType) {
@@ -135,21 +117,56 @@ public class MarketDataService {
 
     // --- MÉTODOS PRIVADOS DE BUSCA ---
 
+    /**
+     * MUDANÇA COMPLETA: Este método foi reescrito para usar a Alpha Vantage.
+     * Como a API gratuita da Alpha Vantage não suporta múltiplos tickers em uma única chamada de cotação,
+     * este método faz uma chamada para cada ticker de forma reativa (paralela), sem bloquear o processo.
+     * Adiciona um pequeno atraso entre as chamadas para respeitar os limites de taxa da API gratuita.
+     */
     private void fetchStockPrices(List<String> tickers) {
-        String tickersForApi = String.join(",", tickers);
-        brapiWebClient.get()
-                .uri("/quote/{tickers}", tickersForApi)
-                .retrieve()
-                .bodyToMono(QuoteResponse.class)
+        // O plano gratuito da Alpha Vantage tem um limite de ~5 chamadas por minuto.
+        // Um delay de 15 segundos entre cada chamada é uma abordagem segura.
+        Flux.fromIterable(tickers)
+                .delayElements(Duration.ofSeconds(15)) // IMPORTANTE: Respeita o rate limit
+                .flatMap(this::fetchSingleStockPrice) // Chama a API para cada ticker
                 .subscribe(
-                        response -> response.results().forEach(quote -> {
-                            priceCache.put(quote.symbol().toUpperCase(), quote.regularMarketPrice());
-                            logger.info("Cache de Ações atualizado: {} = {}", quote.symbol(), quote.regularMarketPrice());
-                        }),
-                        error -> logger.error("Erro ao buscar preços de ações na Brapi: {}", error.getMessage())
+                        // onNext: o que fazer quando um preço é recebido com sucesso
+                        quote -> {
+                            // A API retorna o símbolo com sufixo ".SA", removemos para manter o cache consistente
+                            String ticker = quote.symbol().replace(".SA", "");
+                            priceCache.put(ticker.toUpperCase(), quote.price());
+                            logger.info("Cache de Ações atualizado: {} = {}", ticker.toUpperCase(), quote.price());
+                        },
+                        // onError: o que fazer se ocorrer um erro no fluxo
+                        error -> logger.error("Erro no fluxo de busca de preços de ações: {}", error.getMessage())
                 );
     }
 
+    /**
+     * MUDANÇA: Novo método auxiliar para buscar o preço de um único ativo na Alpha Vantage.
+     * Retorna um Mono, que pode conter o resultado, um erro ou ser vazio.
+     */
+    private Mono<GlobalQuote> fetchSingleStockPrice(String ticker) {
+        // Ativos da B3 precisam do sufixo ".SA" na Alpha Vantage
+        String tickerForApi = ticker + ".SA";
+
+        return alphaVantageWebClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/query")
+                        .queryParam("function", "GLOBAL_QUOTE")
+                        .queryParam("symbol", tickerForApi)
+                        .queryParam("apikey", this.alphaVantageApiKey)
+                        .build())
+                .retrieve()
+                .bodyToMono(AlphaVantageQuoteResponse.class)
+                .map(AlphaVantageQuoteResponse::quote)
+                .filter(Objects::nonNull) // Filtra respostas onde o objeto "Global Quote" é nulo (ex: ticker inválido ou limite de API)
+                .doOnError(error -> logger.error("Erro ao buscar preço para {}: {}", ticker, error.getMessage()))
+                .onErrorResume(e -> Mono.empty()); // Se um ticker falhar, não quebra o fluxo dos outros
+    }
+
+
+    // Método para cripto não modificado
     private void fetchCryptoPrices(List<String> tickers) {
         String idsForApi = tickers.stream().map(this::mapTickerToCoingeckoId).collect(Collectors.joining(","));
         coingeckoWebClient.get()
@@ -175,17 +192,18 @@ public class MarketDataService {
         return switch (ticker.toUpperCase()) {
             case "BTC" -> "bitcoin";
             case "ETH" -> "ethereum";
-            // Adicione outros mapeamentos comuns aqui se desejar
             default -> ticker.toLowerCase();
         };
     }
 
-    // --- DTOs INTERNOS PARA PARSE DAS RESPOSTAS DAS APIS ---
-    // Mantidos como 'private record' para que o serviço seja totalmente autocontido.
+    // --- MUDANÇA: DTOs INTERNOS ATUALIZADOS PARA A ALPHA VANTAGE ---
+    // A resposta da Alpha Vantage para GLOBAL_QUOTE é um objeto aninhado.
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    private record QuoteResponse(List<QuoteResult> results) {}
+    private record AlphaVantageQuoteResponse(@JsonProperty("Global Quote") GlobalQuote quote) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    private record QuoteResult(String symbol, BigDecimal regularMarketPrice) {}
+    private record GlobalQuote(
+            @JsonProperty("01. symbol") String symbol,
+            @JsonProperty("05. price") BigDecimal price) {}
 }
