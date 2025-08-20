@@ -158,10 +158,35 @@ public class PortfolioService {
                         BigDecimal::add
                         )
                 ));
+        BigDecimal totalValue = BigDecimal.ZERO;
         BigDecimal totalCripto = totalsByType.get("CRYPTO");
         BigDecimal totalStock = totalsByType.get("STOCK");
-        BigDecimal totalFixedIncome = fixedIncomeService.getAllValue();
-        return new AssetPercentage(totalCripto,totalStock,totalFixedIncome);
+        BigDecimal criptoPercentage = BigDecimal.ZERO;
+        BigDecimal stockPercentage = BigDecimal.ZERO;
+        if (totalCripto != null) {
+            totalValue = totalValue.add(totalCripto);
+        }
+        if(totalStock != null) {
+            totalValue = totalStock.add(totalCripto);
+            stockPercentage = totalStock
+                    .divide(totalValue,10,RoundingMode.HALF_UP)
+                    .multiply(new BigDecimal(100))
+                    .setScale(2, RoundingMode.HALF_UP);
+        }
 
+        if(totalCripto != null) {
+            criptoPercentage = totalCripto
+                    .divide(totalValue,10,RoundingMode.HALF_UP)
+                    .multiply(new BigDecimal(100))
+                    .setScale(2, RoundingMode.HALF_UP);
+        }
+
+        System.out.println(totalStock);
+        System.out.println(totalCripto);
+        BigDecimal totalFixedIncome = fixedIncomeService.getAllValue();
+
+
+
+        return new AssetPercentage(criptoPercentage,stockPercentage,totalFixedIncome);
     }
 }
