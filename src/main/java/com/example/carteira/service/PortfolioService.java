@@ -1,10 +1,7 @@
 package com.example.carteira.service;
 
 import com.example.carteira.model.Transaction;
-import com.example.carteira.model.dtos.AssetPercentage;
-import com.example.carteira.model.dtos.AssetPositionDto;
-import com.example.carteira.model.dtos.PortfolioSummaryDto;
-import com.example.carteira.model.dtos.TransactionRequest;
+import com.example.carteira.model.dtos.*;
 import com.example.carteira.model.enums.TransactionType;
 import com.example.carteira.repository.TransactionRepository;
 import org.springframework.stereotype.Service;
@@ -72,20 +69,6 @@ public class PortfolioService {
                 .collect(Collectors.toList());
     }
 
-    public Map<String, List<AssetPositionDto>> getConsolidatedPortfolioGrouped() {
-        // Reutiliza seu método que já busca a lista completa e unificada
-        List<AssetPositionDto> allAssets = getConsolidatedPortfolio();
-
-        // Agrupa a lista em um mapa. Usamos toLowerCase() para garantir as chaves "crypto", "stock", etc.
-        return allAssets.stream()
-                .collect(Collectors.groupingBy(
-                        asset -> asset.getAssetType().toLowerCase()
-                ));
-    }
-
-    /**
-     * Consolida todas as transações de um ticker (Ação ou Cripto) em uma única posição.
-     */
     private AssetPositionDto consolidateTicker(String ticker) {
         List<Transaction> transactions = transactionRepository.findByTickerOrderByTransactionDateAsc(ticker);
         if (transactions.isEmpty()) {
@@ -139,6 +122,58 @@ public class PortfolioService {
         return position;
     }
 
+    public PortfolioDashboardDto getPortfolioDashboardData() {
+        // 1. CALCULA A LISTA COMPLETA APENAS UMA VEZ
+        List<AssetPositionDto> allAssets = getConsolidatedPortfolio();
+
+        // 2. REUTILIZA A LISTA para gerar as partes necessárias
+
+        // Lógica do Summary (adaptada do seu método getPortfolioSummary)
+        BigDecimal totalHeritage = allAssets.stream().map(AssetPositionDto::getCurrentValue).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal totalInvested = allAssets.stream().map(AssetPositionDto::getTotalInvested).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal profitability = BigDecimal.ZERO;
+        if (totalInvested.compareTo(BigDecimal.ZERO) > 0) {
+            profitability = (totalHeritage.subtract(totalInvested)).divide(totalInvested, 4, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100));
+        }
+        PortfolioSummaryDto summary = new PortfolioSummaryDto(totalHeritage, totalInvested, profitability);
+
+
+        // Lógica das Porcentagens (adaptada do seu método getAssetPercentage)
+        Map<String, BigDecimal> totalsByType = allAssets.stream().collect(Collectors.groupingBy(AssetPositionDto::getAssetType, Collectors.reducing(BigDecimal.ZERO, AssetPositionDto::getCurrentValue, BigDecimal::add)));
+        BigDecimal cryptoPercentage = BigDecimal.ZERO;
+        BigDecimal stockPercentage = BigDecimal.ZERO;
+        BigDecimal fixedIncomePercentage = BigDecimal.ZERO;
+        if (totalHeritage.compareTo(BigDecimal.ZERO) > 0) {
+            BigDecimal totalCrypto = totalsByType.getOrDefault("CRYPTO", BigDecimal.ZERO);
+            BigDecimal totalStock = totalsByType.getOrDefault("STOCK", BigDecimal.ZERO);
+            BigDecimal totalFixedIncome = totalsByType.getOrDefault("FIXED_INCOME", BigDecimal.ZERO);
+            cryptoPercentage = totalCrypto.divide(totalHeritage, 4, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100));
+            stockPercentage = totalStock.divide(totalHeritage, 4, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100));
+            fixedIncomePercentage = totalFixedIncome.divide(totalHeritage, 4, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100));
+        }
+        AssetPercentage percentages = new AssetPercentage(cryptoPercentage, stockPercentage, fixedIncomePercentage);
+
+
+        // Lógica da Lista Agrupada (adaptada do seu método getConsolidatedPortfolioGrouped)
+        Map<String, List<AssetPositionDto>> assetsGrouped = allAssets.stream()
+                .collect(Collectors.groupingBy(asset -> {
+                    switch (asset.getAssetType()) {
+                        case "CRYPTO":
+                            return "crypto";
+                        case "STOCK":
+                            return "stock";
+                        case "FIXED_INCOME":
+                            return "fixedIncome"; // AQUI ESTÁ A CORREÇÃO CRUCIAL
+                        default:
+                            return "other"; // Para qualquer outro tipo futuro
+                    }
+                }));
+
+
+        // 3. RETORNA O DTO PAI COM TUDO DENTRO
+        return new PortfolioDashboardDto(summary, percentages, assetsGrouped);
+    }
+
     public PortfolioSummaryDto getPortfolioSummary() {
         //get total heritage
         BigDecimal totalHeritage = BigDecimal.ZERO;
@@ -161,30 +196,4 @@ public class PortfolioService {
         return new PortfolioSummaryDto(totalHeritage,totalInvested,profitability);
     }
 
-    public AssetPercentage getAssetPercentage() {
-
-        Map<String,BigDecimal> totalsByType = getConsolidatedPortfolio().stream().collect(Collectors.groupingBy(AssetPositionDto::getAssetType, Collectors.reducing(
-                        BigDecimal.ZERO,
-                        AssetPositionDto::getCurrentValue,
-                        BigDecimal::add
-                )
-        ));
-        //total heritage
-        BigDecimal totalPortfolioValue = totalsByType.values().stream().reduce(BigDecimal.ZERO, BigDecimal::add);
-
-        if(totalPortfolioValue.compareTo(BigDecimal.ZERO) == 0) {
-            return new AssetPercentage(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
-        }
-
-        BigDecimal totalCrypto = totalsByType.getOrDefault("CRYPTO", BigDecimal.ZERO);
-        BigDecimal totalFixedIncome = totalsByType.getOrDefault("FIXED_INCOME", BigDecimal.ZERO);
-        BigDecimal totalStock = totalsByType.getOrDefault("STOCK", BigDecimal.ZERO);
-
-        BigDecimal cryptoPercentage = totalCrypto.divide(totalPortfolioValue, 4, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100));
-        BigDecimal stockPercentage = totalStock.divide(totalPortfolioValue, 4, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100));
-        BigDecimal fixedIncomePercentage = totalFixedIncome.divide(totalPortfolioValue, 4, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100));
-
-
-        return new AssetPercentage(cryptoPercentage,stockPercentage,fixedIncomePercentage);
-    }
 }

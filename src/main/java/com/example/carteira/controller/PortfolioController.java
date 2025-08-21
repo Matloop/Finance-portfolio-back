@@ -1,10 +1,7 @@
 package com.example.carteira.controller;
 
 import com.example.carteira.model.Transaction;
-import com.example.carteira.model.dtos.AssetPercentage;
-import com.example.carteira.model.dtos.AssetPositionDto;
-import com.example.carteira.model.dtos.PortfolioSummaryDto;
-import com.example.carteira.model.dtos.TransactionRequest;
+import com.example.carteira.model.dtos.*;
 import com.example.carteira.service.MarketDataService;
 import com.example.carteira.service.PortfolioService;
 import org.springframework.http.ResponseEntity;
@@ -39,13 +36,10 @@ public class PortfolioController {
         return ResponseEntity.ok(portfolioService.getPortfolioSummary());
     }
 
-    @GetMapping("/assets")
-    public ResponseEntity<Map<String, List<AssetPositionDto>>> getAssetsGrouped() {
-        return ResponseEntity.ok(portfolioService.getConsolidatedPortfolioGrouped());
+    @GetMapping("/dashboard")
+    public ResponseEntity<PortfolioDashboardDto> getPortfolioDashboard() {
+        return ResponseEntity.ok(portfolioService.getPortfolioDashboardData());
     }
 
-    @GetMapping("/assetPercentage")
-    public ResponseEntity<AssetPercentage> getAssetPercentage() {
-        return ResponseEntity.ok(portfolioService.getAssetPercentage());
-    }
+
 }

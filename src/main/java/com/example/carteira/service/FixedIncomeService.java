@@ -104,6 +104,7 @@ public class FixedIncomeService {
 
         for (LocalDate date = startDate; date.isBefore(endDate); date = date.plusDays(1)) {
             BigDecimal dailyCdi = cdiRates.get(date);
+
             if (dailyCdi != null) {
                 BigDecimal dailyFactor = BigDecimal.ONE.add(dailyCdi.multiply(contractedRatePercentage));
                 accumulatedFactor = accumulatedFactor.multiply(dailyFactor);
