@@ -72,6 +72,17 @@ public class PortfolioService {
                 .collect(Collectors.toList());
     }
 
+    public Map<String, List<AssetPositionDto>> getConsolidatedPortfolioGrouped() {
+        // Reutiliza seu método que já busca a lista completa e unificada
+        List<AssetPositionDto> allAssets = getConsolidatedPortfolio();
+
+        // Agrupa a lista em um mapa. Usamos toLowerCase() para garantir as chaves "crypto", "stock", etc.
+        return allAssets.stream()
+                .collect(Collectors.groupingBy(
+                        asset -> asset.getAssetType().toLowerCase()
+                ));
+    }
+
     /**
      * Consolida todas as transações de um ticker (Ação ou Cripto) em uma única posição.
      */

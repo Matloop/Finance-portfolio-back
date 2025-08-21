@@ -39,6 +39,11 @@ public class PortfolioController {
         return ResponseEntity.ok(portfolioService.getPortfolioSummary());
     }
 
+    @GetMapping("/assets")
+    public ResponseEntity<Map<String, List<AssetPositionDto>>> getAssetsGrouped() {
+        return ResponseEntity.ok(portfolioService.getConsolidatedPortfolioGrouped());
+    }
+
     @GetMapping("/assetPercentage")
     public ResponseEntity<AssetPercentage> getAssetPercentage() {
         return ResponseEntity.ok(portfolioService.getAssetPercentage());
