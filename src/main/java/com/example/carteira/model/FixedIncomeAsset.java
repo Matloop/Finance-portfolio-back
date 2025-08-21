@@ -25,6 +25,8 @@ public class FixedIncomeAsset {
 
     @Column(nullable = false)
     private LocalDate investmentDate;
+    @Column(nullable = false)
+    private boolean isDailyLiquid;
 
     @Column(nullable = false)
     private LocalDate maturityDate;

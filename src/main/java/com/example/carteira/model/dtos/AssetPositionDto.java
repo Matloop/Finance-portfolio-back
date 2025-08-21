@@ -8,7 +8,8 @@ import java.math.BigDecimal;
 @Setter
 public class AssetPositionDto {
     private Long id; // ID da transação ou do ativo de RF
-    private String ticker; // Ticker ou Nome do Ativo
+    private String ticker;
+    private String name;// Ticker ou Nome do Ativo
     private String assetType; // "STOCK", "CRYPTO", ou "FIXED_INCOME"
     private BigDecimal totalInvested;
     private BigDecimal currentValue;

@@ -133,12 +133,14 @@ public class PortfolioService {
         BigDecimal totalHeritage = BigDecimal.ZERO;
         BigDecimal totalInvested = BigDecimal.ZERO;
         BigDecimal profitability;
-        for(String t: transactionRepository.findDistinctTickers()){
-            if(t != null){
-                totalHeritage = totalHeritage.add((this.consolidateTicker(t)).getCurrentValue());
-                totalInvested = totalInvested.add((this.consolidateTicker(t)).getTotalInvested());
+
+        for(AssetPositionDto dto : getConsolidatedPortfolio()) {
+            if(dto != null) {
+                totalHeritage = totalHeritage.add(dto.getCurrentValue());
+                totalInvested = totalInvested.add(dto.getTotalInvested());
             }
         }
+
         if (totalInvested.compareTo(BigDecimal.ZERO) <= 0) {
             return new PortfolioSummaryDto(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
         }
@@ -149,44 +151,29 @@ public class PortfolioService {
     }
 
     public AssetPercentage getAssetPercentage() {
-        Map<String,BigDecimal> totalsByType = transactionRepository.findDistinctTickers().stream()
-                .map(this::consolidateTicker)
-                .filter(Objects::nonNull)
-                .collect(Collectors.groupingBy(AssetPositionDto::getAssetType, Collectors.reducing(
+
+        Map<String,BigDecimal> totalsByType = getConsolidatedPortfolio().stream().collect(Collectors.groupingBy(AssetPositionDto::getAssetType, Collectors.reducing(
                         BigDecimal.ZERO,
                         AssetPositionDto::getCurrentValue,
                         BigDecimal::add
-                        )
-                ));
-        BigDecimal totalValue = BigDecimal.ZERO;
-        BigDecimal totalCripto = totalsByType.get("CRYPTO");
-        BigDecimal totalStock = totalsByType.get("STOCK");
-        BigDecimal criptoPercentage = BigDecimal.ZERO;
-        BigDecimal stockPercentage = BigDecimal.ZERO;
-        if (totalCripto != null) {
-            totalValue = totalValue.add(totalCripto);
-        }
-        if(totalStock != null) {
-            totalValue = totalStock.add(totalCripto);
-            stockPercentage = totalStock
-                    .divide(totalValue,10,RoundingMode.HALF_UP)
-                    .multiply(new BigDecimal(100))
-                    .setScale(2, RoundingMode.HALF_UP);
+                )
+        ));
+        //total heritage
+        BigDecimal totalPortfolioValue = totalsByType.values().stream().reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        if(totalPortfolioValue.compareTo(BigDecimal.ZERO) == 0) {
+            return new AssetPercentage(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
         }
 
-        if(totalCripto != null) {
-            criptoPercentage = totalCripto
-                    .divide(totalValue,10,RoundingMode.HALF_UP)
-                    .multiply(new BigDecimal(100))
-                    .setScale(2, RoundingMode.HALF_UP);
-        }
+        BigDecimal totalCrypto = totalsByType.getOrDefault("CRYPTO", BigDecimal.ZERO);
+        BigDecimal totalFixedIncome = totalsByType.getOrDefault("FIXED_INCOME", BigDecimal.ZERO);
+        BigDecimal totalStock = totalsByType.getOrDefault("STOCK", BigDecimal.ZERO);
 
-        System.out.println(totalStock);
-        System.out.println(totalCripto);
-        BigDecimal totalFixedIncome = fixedIncomeService.getAllValue();
+        BigDecimal cryptoPercentage = totalCrypto.divide(totalPortfolioValue, 4, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100));
+        BigDecimal stockPercentage = totalStock.divide(totalPortfolioValue, 4, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100));
+        BigDecimal fixedIncomePercentage = totalFixedIncome.divide(totalPortfolioValue, 4, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100));
 
 
-
-        return new AssetPercentage(criptoPercentage,stockPercentage,totalFixedIncome);
+        return new AssetPercentage(cryptoPercentage,stockPercentage,fixedIncomePercentage);
     }
 }

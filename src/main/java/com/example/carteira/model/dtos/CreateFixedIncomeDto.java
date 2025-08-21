@@ -25,6 +25,8 @@ public class CreateFixedIncomeDto {
     @PastOrPresent(message = "A data de investimento não pode ser no futuro.")
     private LocalDate investmentDate;
 
+    private boolean isDailyLiquid;
+
     @NotNull(message = "A data de vencimento não pode ser nula.")
     @Future(message = "A data de vencimento deve ser no futuro.")
     private LocalDate maturityDate;

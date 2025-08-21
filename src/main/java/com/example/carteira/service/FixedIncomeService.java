@@ -41,6 +41,7 @@ public class FixedIncomeService {
         asset.setName(dto.getName());
         asset.setInvestedAmount(dto.getInvestedAmount());
         asset.setInvestmentDate(dto.getInvestmentDate());
+        asset.setDailyLiquid(dto.isDailyLiquid());
         asset.setMaturityDate(dto.getMaturityDate());
         asset.setIndexType(dto.getIndexType());
         asset.setContractedRate(dto.getContractedRate());
