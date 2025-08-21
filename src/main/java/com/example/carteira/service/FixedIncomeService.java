@@ -72,6 +72,7 @@ public class FixedIncomeService {
         AssetPositionDto dto = new AssetPositionDto();
         dto.setId(asset.getId());
         dto.setAssetType("FIXED_INCOME");
+        dto.setName(asset.getName());
         dto.setTicker(asset.getName());
         dto.setTotalInvested(asset.getInvestedAmount());
         dto.setCurrentValue(netValue.setScale(2, RoundingMode.HALF_UP));
