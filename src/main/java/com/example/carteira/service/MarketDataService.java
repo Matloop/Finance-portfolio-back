@@ -51,6 +51,8 @@ public class MarketDataService {
     private final String alphaVantageApiKey;
 
     private final Map<String, BigDecimal> priceCache = new ConcurrentHashMap<>();
+    //cache to map the id in coingecko
+    private final Map<String, String> tickerToCoingeckoIdCache = new ConcurrentHashMap<>();
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
 
     /**
@@ -79,10 +81,49 @@ public class MarketDataService {
 
     @PostConstruct
     private void initialize() {
-        logger.info("Iniciando MarketDataService. A primeira busca de dados ocorrerá em 10 segundos.");
-        scheduler.scheduleAtFixedRate(this::refreshAllMarketData, 10, 300, TimeUnit.SECONDS);
+        logger.info("Iniciando MarketDataService...");
+        populateCryptoIdCache()
+                .doOnSuccess(aVoid -> { // o argumento aqui é ignorado, mas necessário pela assinatura
+                    logger.info("Cache de IDs de Criptomoedas populado com sucesso!");
+                    logger.info("A primeira busca de dados de preços ocorrerá em 10 segundos.");
+                    scheduler.scheduleAtFixedRate(this::refreshAllMarketData, 10, 300, TimeUnit.SECONDS);
+                })
+                .doOnError(error -> {
+                    logger.error("Falha ao popular o cache de IDs de Criptomoedas! O serviço pode não funcionar corretamente para criptoativos.", error);
+                    // Mesmo com erro, agenda a tarefa.
+                    scheduler.scheduleAtFixedRate(this::refreshAllMarketData, 10, 300, TimeUnit.SECONDS);
+                })
+                .subscribe(); // Apenas "aciona" o Mono.
     }
 
+
+    private Mono<Void> populateCryptoIdCache() {
+        logger.info("Populando caches");
+        return coingeckoWebClient.get()
+                .uri("/coins/list")
+                .retrieve()
+                .bodyToFlux(CoinGeckoCoin.class)
+                // Passo 1: Em vez de coletar para um mapa, colete todos os itens em uma lista.
+                // O Mono resultante será um Mono<List<CoinGeckoCoin>>.
+                .collectList()
+                // Passo 2: Quando a lista estiver pronta, use 'doOnNext' para processá-la.
+                .doOnNext(coinList -> {
+                    // Use a API de Streams do Java, que é extremamente robusta.
+                    Map<String, String> newCacheMap = coinList.stream()
+                            .collect(Collectors.toMap(
+                                    // A chave do mapa será o símbolo (ticker) em maiúsculas
+                                    coin -> coin.symbol().toUpperCase(),
+                                    // O valor será o ID
+                                    CoinGeckoCoin::id,
+                                    // Função de merge para resolver conflitos de chaves duplicadas
+                                    (existingId, newId) -> existingId
+                            ));
+                    // Atualize seu cache de uma só vez com o novo mapa.
+                    tickerToCoingeckoIdCache.putAll(newCacheMap);
+                })
+                // Passo 3: Após o processamento, transforme o resultado de volta em um Mono<Void>.
+                .then();
+    }
     public BigDecimal getPrice(String ticker) {
         return priceCache.getOrDefault(ticker.toUpperCase(), BigDecimal.ZERO);
     }
@@ -116,13 +157,6 @@ public class MarketDataService {
     }
 
     // --- MÉTODOS PRIVADOS DE BUSCA ---
-
-    /**
-     * MUDANÇA COMPLETA: Este método foi reescrito para usar a Alpha Vantage.
-     * Como a API gratuita da Alpha Vantage não suporta múltiplos tickers em uma única chamada de cotação,
-     * este método faz uma chamada para cada ticker de forma reativa (paralela), sem bloquear o processo.
-     * Adiciona um pequeno atraso entre as chamadas para respeitar os limites de taxa da API gratuita.
-     */
     private void fetchStockPrices(List<String> tickers) {
         // O plano gratuito da Alpha Vantage tem um limite de ~5 chamadas por minuto.
         // Um delay de 15 segundos entre cada chamada é uma abordagem segura.
@@ -165,10 +199,8 @@ public class MarketDataService {
                 .onErrorResume(e -> Mono.empty()); // Se um ticker falhar, não quebra o fluxo dos outros
     }
 
-
-    // Método para cripto não modificado
     private void fetchCryptoPrices(List<String> tickers) {
-        String idsForApi = tickers.stream().map(this::mapTickerToCoingeckoId).collect(Collectors.joining(","));
+        String idsForApi = tickers.stream().map(this::mapTickerToCoingeckoId).filter(Objects::nonNull).collect(Collectors.joining(","));
         coingeckoWebClient.get()
                 .uri(uriBuilder -> uriBuilder.path("/simple/price").queryParam("ids", idsForApi).queryParam("vs_currencies", "brl").build())
                 .retrieve()
@@ -189,15 +221,13 @@ public class MarketDataService {
     }
 
     private String mapTickerToCoingeckoId(String ticker) {
-        return switch (ticker.toUpperCase()) {
-            case "BTC" -> "bitcoin";
-            case "ETH" -> "ethereum";
-            default -> ticker.toLowerCase();
-        };
+        String id = tickerToCoingeckoIdCache.get(ticker.toUpperCase());
+        if (id == null) {
+            logger.warn("ID não encontrado");
+        }
+        return id;
     }
 
-    // --- MUDANÇA: DTOs INTERNOS ATUALIZADOS PARA A ALPHA VANTAGE ---
-    // A resposta da Alpha Vantage para GLOBAL_QUOTE é um objeto aninhado.
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     private record AlphaVantageQuoteResponse(@JsonProperty("Global Quote") GlobalQuote quote) {}
@@ -206,4 +236,6 @@ public class MarketDataService {
     private record GlobalQuote(
             @JsonProperty("01. symbol") String symbol,
             @JsonProperty("05. price") BigDecimal price) {}
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private record CoinGeckoCoin(String id, String symbol, String name) {}
 }
