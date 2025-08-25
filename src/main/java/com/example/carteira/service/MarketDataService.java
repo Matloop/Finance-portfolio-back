@@ -47,6 +47,17 @@ public class MarketDataService {
     private final WebClient coingeckoWebClient;
     private final TransactionRepository transactionRepository;
 
+    private static final Map<String, String> PRIORITY_MAP = Map.of(
+            "BTC", "bitcoin",
+            "ETH", "ethereum",
+            "USDT", "tether",
+            "BNB", "binancecoin",
+            "SOL", "solana",
+            "USDC", "usd-coin",
+            "XRP", "ripple",
+            "ADA", "cardano"
+    );
+
     // MUDANÇA: Chave da API da Alpha Vantage
     private final String alphaVantageApiKey;
 
@@ -99,27 +110,23 @@ public class MarketDataService {
 
     private Mono<Void> populateCryptoIdCache() {
         logger.info("Populando caches");
+        tickerToCoingeckoIdCache.clear();
+        tickerToCoingeckoIdCache.putAll(PRIORITY_MAP);
+        logger.info("Cache de prioridade carregado com {} ativos.", PRIORITY_MAP.size());
         return coingeckoWebClient.get()
                 .uri("/coins/list")
                 .retrieve()
                 .bodyToFlux(CoinGeckoCoin.class)
                 // Passo 1: Em vez de coletar para um mapa, colete todos os itens em uma lista.
                 // O Mono resultante será um Mono<List<CoinGeckoCoin>>.
-                .collectList()
                 // Passo 2: Quando a lista estiver pronta, use 'doOnNext' para processá-la.
-                .doOnNext(coinList -> {
-                    // Use a API de Streams do Java, que é extremamente robusta.
-                    Map<String, String> newCacheMap = coinList.stream()
-                            .collect(Collectors.toMap(
-                                    // A chave do mapa será o símbolo (ticker) em maiúsculas
-                                    coin -> coin.symbol().toUpperCase(),
-                                    // O valor será o ID
-                                    CoinGeckoCoin::id,
-                                    // Função de merge para resolver conflitos de chaves duplicadas
-                                    (existingId, newId) -> existingId
-                            ));
-                    // Atualize seu cache de uma só vez com o novo mapa.
-                    tickerToCoingeckoIdCache.putAll(newCacheMap);
+                .doOnNext(coin -> {
+                    // A chave é o símbolo em maiúsculas
+                    String symbol = coin.symbol().toUpperCase();
+                    // [MUDANÇA CRÍTICA] Usa putIfAbsent para não sobrescrever os prioritários.
+                    if (symbol != null && !symbol.isBlank()) {
+                        tickerToCoingeckoIdCache.putIfAbsent(symbol, coin.id());
+                    }
                 })
                 // Passo 3: Após o processamento, transforme o resultado de volta em um Mono<Void>.
                 .then();
