@@ -48,6 +48,7 @@ public class PortfolioService {
         // Chama o MarketDataService para buscar o preço do novo ativo imediatamente.
         marketDataService.updatePriceForTickers(
                 List.of(savedTransaction.getTicker()),
+                List.of(savedTransaction.getMarket()),
                 savedTransaction.getAssetType()
         );
 
@@ -111,7 +112,7 @@ public class PortfolioService {
 
         AssetPositionDto position = new AssetPositionDto();
         position.setTicker(ticker);
-        position.setAssetType(transactions.get(0).getAssetType().name());
+        position.setAssetType(transactions.get(0).getAssetType());
         position.setTotalQuantity(totalQuantity);
         position.setAveragePrice(averagePrice);
         position.setTotalInvested(currentPositionCost.setScale(2, RoundingMode.HALF_UP));
@@ -139,30 +140,36 @@ public class PortfolioService {
 
 
         // Lógica das Porcentagens (adaptada do seu método getAssetPercentage)
-        Map<String, BigDecimal> totalsByType = allAssets.stream().collect(Collectors.groupingBy(AssetPositionDto::getAssetType, Collectors.reducing(BigDecimal.ZERO, AssetPositionDto::getCurrentValue, BigDecimal::add)));
-        BigDecimal cryptoPercentage = BigDecimal.ZERO;
-        BigDecimal stockPercentage = BigDecimal.ZERO;
-        BigDecimal fixedIncomePercentage = BigDecimal.ZERO;
+        Map<String, BigDecimal> totalsByCategory = allAssets.stream()
+                .collect(Collectors.groupingBy(
+                        this::getAssetCategoryKey, // Usa o método auxiliar para criar chaves como "STOCK_B3"
+                        Collectors.reducing(BigDecimal.ZERO, AssetPositionDto::getCurrentValue, BigDecimal::add)
+                ));
+        Map<String, BigDecimal> percentages;
+
         if (totalHeritage.compareTo(BigDecimal.ZERO) > 0) {
-            BigDecimal totalCrypto = totalsByType.getOrDefault("CRYPTO", BigDecimal.ZERO);
-            BigDecimal totalStock = totalsByType.getOrDefault("STOCK", BigDecimal.ZERO);
-            BigDecimal totalFixedIncome = totalsByType.getOrDefault("FIXED_INCOME", BigDecimal.ZERO);
-            cryptoPercentage = totalCrypto.divide(totalHeritage, 4, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100));
-            stockPercentage = totalStock.divide(totalHeritage, 4, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100));
-            fixedIncomePercentage = totalFixedIncome.divide(totalHeritage, 4, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100));
+            percentages = totalsByCategory.entrySet().stream()
+                    .collect(Collectors.toMap(
+                            Map.Entry::getKey, // A chave é a mesma (ex: "STOCK_B3")
+                            entry -> entry.getValue() // Pega o valor (ex: 4550.00)
+                                    .divide(totalHeritage, 4, RoundingMode.HALF_UP) // Divide pelo total
+                                    .multiply(BigDecimal.valueOf(100)) // Multiplica por 100
+                    ));
+        } else {
+            percentages = Map.of(); // Retorna um mapa vazio se não houver patrimônio
         }
-        AssetPercentage percentages = new AssetPercentage(cryptoPercentage, stockPercentage, fixedIncomePercentage);
+
 
 
         // Lógica da Lista Agrupada (adaptada do seu método getConsolidatedPortfolioGrouped)
         Map<String, List<AssetPositionDto>> assetsGrouped = allAssets.stream()
                 .collect(Collectors.groupingBy(asset -> {
                     switch (asset.getAssetType()) {
-                        case "CRYPTO":
+                        case CRYPTO:
                             return "crypto";
-                        case "STOCK":
+                        case STOCK:
                             return "stock";
-                        case "FIXED_INCOME":
+                        case FIXED_INCOME:
                             return "fixedIncome"; // AQUI ESTÁ A CORREÇÃO CRUCIAL
                         default:
                             return "other"; // Para qualquer outro tipo futuro
@@ -172,6 +179,12 @@ public class PortfolioService {
 
         // 3. RETORNA O DTO PAI COM TUDO DENTRO
         return new PortfolioDashboardDto(summary, percentages, assetsGrouped);
+    }
+
+    private String getAssetCategoryKey(AssetPositionDto asset) {
+        // Para Renda Fixa e Cripto, o "mercado" pode ser o próprio tipo para consistência.
+        String market = (asset.getMarket() != null) ? asset.getMarket().name() : asset.getAssetType().name();
+        return asset.getAssetType().name() + "_" + market;
     }
 
     public PortfolioSummaryDto getPortfolioSummary() {

@@ -1,6 +1,7 @@
 package com.example.carteira.model;
 
 import com.example.carteira.model.enums.AssetType;
+import com.example.carteira.model.enums.Market;
 import com.example.carteira.model.enums.TransactionType;
 import jakarta.persistence.*;
 import lombok.Getter;
@@ -20,6 +21,8 @@ public class Transaction {
 
     @Column(nullable = false)
     private String ticker; // Ex: "PETR4", "BTC"
+    @Enumerated(EnumType.STRING)
+    private Market market;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)

@@ -2,6 +2,7 @@ package com.example.carteira.service;
 
 import com.example.carteira.model.Transaction;
 import com.example.carteira.model.enums.AssetType;
+import com.example.carteira.model.enums.Market;
 import com.example.carteira.repository.TransactionRepository;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -12,15 +13,13 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.yaml.snakeyaml.error.Mark;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.math.BigDecimal;
 import java.time.Duration;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -141,56 +140,74 @@ public class MarketDataService {
 
     public void refreshAllMarketData() {
         logger.info("ATUALIZAÇÃO GERAL: Iniciando busca de dados para todos os ativos...");
-        Map<AssetType, List<String>> tickersByType = transactionRepository.findAll().stream()
-                .collect(Collectors.groupingBy(
-                        Transaction::getAssetType,
-                        Collectors.mapping(t -> t.getTicker().toUpperCase(), Collectors.collectingAndThen(Collectors.toSet(), List::copyOf))
-                ));
+        Map<AssetType, List<Transaction>> transactionsByType = transactionRepository.findAll().stream()
+                .collect(Collectors.groupingBy(Transaction::getAssetType));
 
-        tickersByType.forEach((type, tickers) -> {
+        transactionsByType.forEach((assetType, transactions) -> {
+            // Usamos um Set para garantir que cada transação seja única
+            Set<Transaction> uniqueTransactions = new HashSet<>(transactions);
+
+            List<String> tickers = uniqueTransactions.stream()
+                    .map(t -> t.getTicker().toUpperCase())
+                    .toList();
+
+            // CORREÇÃO 1: Mapear diretamente para o enum, sem usar .name()
+            List<Market> markets = uniqueTransactions.stream()
+                    .map(Transaction::getMarket)
+                    .toList();
+
             if (!tickers.isEmpty()) {
-                updatePriceForTickers(tickers, type);
+                updatePriceForTickers(tickers, markets, assetType);
             }
         });
     }
 
-    public void updatePriceForTickers(List<String> tickers, AssetType assetType) {
+    public void updatePriceForTickers(List<String> tickers, List<Market> markets, AssetType assetType) {
         logger.info("ATUALIZAÇÃO SOB DEMANDA: Buscando preço para {} ({})", tickers, assetType);
         switch (assetType) {
-            case STOCK -> fetchStockPrices(tickers);
+            case STOCK -> fetchStockPrices(tickers, markets);
             case CRYPTO -> fetchCryptoPrices(tickers);
             default -> logger.warn("Tipo de ativo desconhecido: {}", assetType);
         }
     }
 
-    // --- MÉTODOS PRIVADOS DE BUSCA ---
-    private void fetchStockPrices(List<String> tickers) {
-        // O plano gratuito da Alpha Vantage tem um limite de ~5 chamadas por minuto.
-        // Um delay de 15 segundos entre cada chamada é uma abordagem segura.
-        Flux.fromIterable(tickers)
-                .delayElements(Duration.ofSeconds(15)) // IMPORTANTE: Respeita o rate limit
-                .flatMap(this::fetchSingleStockPrice) // Chama a API para cada ticker
+    private void fetchStockPrices(List<String> tickers, List<Market> markets) {
+        if (tickers.size() != markets.size()) {
+            logger.error("Erro crítico: As listas de tickers e markets estão dessincronizadas.");
+            return;
+        }
+
+        // A criação do AssetToFetch já estava correta, pois esperava um Market
+        List<AssetToFetch> assetsToFetch = new ArrayList<>();
+        for (int i = 0; i < tickers.size(); i++) {
+            assetsToFetch.add(new AssetToFetch(tickers.get(i), markets.get(i)));
+        }
+
+
+        Flux.fromIterable(assetsToFetch)
+                .delayElements(Duration.ofSeconds(15))
+                .flatMap(this::fetchSingleStockPrice) // Agora passamos o objeto completo
                 .subscribe(
-                        // onNext: o que fazer quando um preço é recebido com sucesso
                         quote -> {
-                            // A API retorna o símbolo com sufixo ".SA", removemos para manter o cache consistente
                             String ticker = quote.symbol().replace(".SA", "");
                             priceCache.put(ticker.toUpperCase(), quote.price());
                             logger.info("Cache de Ações atualizado: {} = {}", ticker.toUpperCase(), quote.price());
                         },
-                        // onError: o que fazer se ocorrer um erro no fluxo
                         error -> logger.error("Erro no fluxo de busca de preços de ações: {}", error.getMessage())
                 );
     }
 
-    /**
-     * MUDANÇA: Novo método auxiliar para buscar o preço de um único ativo na Alpha Vantage.
-     * Retorna um Mono, que pode conter o resultado, um erro ou ser vazio.
-     */
-    private Mono<GlobalQuote> fetchSingleStockPrice(String ticker) {
-        // Ativos da B3 precisam do sufixo ".SA" na Alpha Vantage
-        String tickerForApi = ticker + ".SA";
+    private Mono<GlobalQuote> fetchSingleStockPrice(AssetToFetch asset) {
+        String tickerForApi;
 
+        // A lógica crucial: decidir se o sufixo ".SA" é necessário.
+        if (asset.market() == Market.B3) {
+            tickerForApi = asset.ticker() + ".SA";
+        } else {
+            tickerForApi = asset.ticker();
+        }
+
+        // O resto da chamada da API é o mesmo de antes.
         return alphaVantageWebClient.get()
                 .uri(uriBuilder -> uriBuilder
                         .path("/query")
@@ -201,10 +218,11 @@ public class MarketDataService {
                 .retrieve()
                 .bodyToMono(AlphaVantageQuoteResponse.class)
                 .map(AlphaVantageQuoteResponse::quote)
-                .filter(Objects::nonNull) // Filtra respostas onde o objeto "Global Quote" é nulo (ex: ticker inválido ou limite de API)
-                .doOnError(error -> logger.error("Erro ao buscar preço para {}: {}", ticker, error.getMessage()))
-                .onErrorResume(e -> Mono.empty()); // Se um ticker falhar, não quebra o fluxo dos outros
+                .filter(Objects::nonNull)
+                .doOnError(error -> logger.error("Erro ao buscar preço para {}: {}", asset.ticker(), error.getMessage()))
+                .onErrorResume(e -> Mono.empty());
     }
+
 
     private void fetchCryptoPrices(List<String> tickers) {
         String idsForApi = tickers.stream().map(this::mapTickerToCoingeckoId).filter(Objects::nonNull).collect(Collectors.joining(","));
@@ -245,4 +263,7 @@ public class MarketDataService {
             @JsonProperty("05. price") BigDecimal price) {}
     @JsonIgnoreProperties(ignoreUnknown = true)
     private record CoinGeckoCoin(String id, String symbol, String name) {}
+    private record MarketAssetKey(AssetType type, Market market) {}
+    private record AssetIdentifier(String ticker, String market,AssetType type) {}
+    private record AssetToFetch(String ticker, Market market) {}
 }

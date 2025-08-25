@@ -11,6 +11,6 @@ import java.util.List;
 public interface TransactionRepository extends JpaRepository<Transaction, Long> {
     List<Transaction> findByTickerOrderByTransactionDateAsc(String ticker);
 
-    @Query("SELECT DISTINCT t.ticker FROM Transaction t")
+    @Query("SELECT DISTINCT t.ticker, t.market FROM Transaction t")
     List<String> findDistinctTickers();
 }

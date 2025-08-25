@@ -1,6 +1,7 @@
 package com.example.carteira.model.dtos;
 
 import com.example.carteira.model.enums.AssetType;
+import com.example.carteira.model.enums.Market;
 import com.example.carteira.model.enums.TransactionType;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -19,6 +20,7 @@ public class CreateTransactionDto {
     private String ticker;
     @NotNull
     private AssetType assetType;
+    private Market market;
     @NotNull
     private TransactionType transactionType;
     @NotNull @Positive

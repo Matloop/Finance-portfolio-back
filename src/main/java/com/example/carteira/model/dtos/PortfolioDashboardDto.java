@@ -5,6 +5,7 @@ import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.Setter;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 
@@ -13,6 +14,6 @@ import java.util.Map;
 @AllArgsConstructor // Construtor prático
 public class PortfolioDashboardDto {
     private PortfolioSummaryDto summary;
-    private AssetPercentage percentages;
+    private Map<String, BigDecimal> percentages;
     private Map<String, List<AssetPositionDto>> assets;
 }

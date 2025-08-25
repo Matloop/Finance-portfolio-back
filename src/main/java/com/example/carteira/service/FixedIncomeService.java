@@ -15,6 +15,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+import static com.example.carteira.model.enums.AssetType.FIXED_INCOME;
+
 @Service
 public class FixedIncomeService {
 
@@ -71,7 +73,7 @@ public class FixedIncomeService {
 
         AssetPositionDto dto = new AssetPositionDto();
         dto.setId(asset.getId());
-        dto.setAssetType("FIXED_INCOME");
+        dto.setAssetType(FIXED_INCOME);
         dto.setName(asset.getName());
         dto.setTicker(asset.getName());
         dto.setTotalInvested(asset.getInvestedAmount());
