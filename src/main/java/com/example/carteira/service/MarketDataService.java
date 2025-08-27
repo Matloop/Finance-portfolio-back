@@ -18,6 +18,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -45,6 +46,7 @@ public class MarketDataService {
     private final WebClient alphaVantageWebClient;
     private final WebClient coingeckoWebClient;
     private final TransactionRepository transactionRepository;
+    private BigDecimal usdToBrlRate = BigDecimal.ONE;
 
     private static final Map<String, String> PRIORITY_MAP = Map.of(
             "BTC", "bitcoin",
@@ -196,6 +198,33 @@ public class MarketDataService {
         });
     }
 
+    private Mono<Void> fetchUsdToBrlRate() {
+        logger.info("Buscando taxa de câmbio USD -> BRL...");
+        return alphaVantageWebClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/query")
+                        .queryParam("function", "CURRENCY_EXCHANGE_RATE")
+                        .queryParam("from_currency", "USD")
+                        .queryParam("to_currency", "BRL")
+                        .queryParam("apikey", this.alphaVantageApiKey)
+                        .build())
+                .retrieve()
+                .bodyToMono(ExchangeRateResponse.class)
+                .map(ExchangeRateResponse::exchangeRateData)
+                .filter(Objects::nonNull)
+                .doOnSuccess(rateData -> {
+                    if (rateData.exchangeRate() != null) {
+                        this.usdToBrlRate = rateData.exchangeRate();
+                    } else {
+                        logger.warn("Não foi possível atualizar a taxa de câmbio. Usando o valor anterior: {}", this.usdToBrlRate);
+                    }
+                })
+                .doOnError(error -> logger.error("Erro ao buscar taxa de câmbio: {}", error.getMessage()))
+                .onErrorResume(e -> Mono.empty()) // Não quebra o fluxo se a busca de câmbio falhar
+                .then(); // Converte para Mono<Void> para indicar a conclusão
+    }
+
+
     private void fetchStockPrices(List<String> tickers, List<Market> markets) {
         if (tickers.size() != markets.size()) {
             logger.error("Erro crítico: As listas de tickers e markets estão dessincronizadas.");
@@ -224,15 +253,12 @@ public class MarketDataService {
 
     private Mono<GlobalQuote> fetchSingleStockPrice(AssetToFetch asset) {
         String tickerForApi;
-
-        // A lógica crucial: decidir se o sufixo ".SA" é necessário.
         if (asset.market() == Market.B3) {
             tickerForApi = asset.ticker() + ".SA";
         } else {
             tickerForApi = asset.ticker();
         }
 
-        // O resto da chamada da API é o mesmo de antes.
         return alphaVantageWebClient.get()
                 .uri(uriBuilder -> uriBuilder
                         .path("/query")
@@ -242,10 +268,38 @@ public class MarketDataService {
                         .build())
                 .retrieve()
                 .bodyToMono(AlphaVantageQuoteResponse.class)
-                .map(AlphaVantageQuoteResponse::quote)
-                .filter(Objects::nonNull)
-                .doOnError(error -> logger.error("Erro ao buscar preço para {}: {}", asset.ticker(), error.getMessage()))
-                .onErrorResume(e -> Mono.empty());
+                // MUDANÇA CRÍTICA: Trocamos a combinação .map().filter() por um .flatMap() seguro.
+                .flatMap(response -> {
+                    // Verificamos se o campo 'quote' não é nulo.
+                    if (response.quote() != null) {
+                        // Se não for nulo, retornamos um Mono contendo o valor.
+                        return Mono.just(response.quote());
+                    } else {
+                        // Se for nulo (ex: limite de API atingido), retornamos um Mono vazio.
+                        // Isso sinaliza "nenhum valor" de forma segura, sem quebrar o fluxo.
+                        logger.warn("A resposta da API para {} não continha um 'Global Quote'. Provavelmente o limite de chamadas foi atingido.", asset.ticker());
+                        return Mono.empty();
+                    }
+                })
+                .map(quote -> {
+                    // A lógica de conversão de moeda continua a mesma.
+                    if (asset.market() == Market.US) {
+                        BigDecimal priceInUsd = quote.price();
+                        // Garante que a taxa de câmbio não seja nula ou zero para evitar erros.
+                        if (this.usdToBrlRate != null && this.usdToBrlRate.compareTo(BigDecimal.ZERO) > 0) {
+                            BigDecimal priceInBrl = priceInUsd.multiply(this.usdToBrlRate);
+                            logger.info("Convertendo {}: ${} -> R$ {}", asset.ticker(), priceInUsd.setScale(2, RoundingMode.HALF_UP), priceInBrl.setScale(2, RoundingMode.HALF_UP));
+                            return new GlobalQuote(quote.symbol(), priceInBrl);
+                        } else {
+                            logger.error("Taxa de câmbio USD/BRL inválida ({}). Não foi possível converter o preço de {}.", this.usdToBrlRate, asset.ticker());
+                            // Retorna o quote original para não quebrar, mas com log de erro.
+                            return quote;
+                        }
+                    }
+                    return quote;
+                })
+                .doOnError(error -> logger.error("Erro no fluxo reativo ao buscar preço para {}: {}", asset.ticker(), error.getMessage()))
+                .onErrorResume(e -> Mono.empty()); // Se um ticker falhar, não quebra o fluxo dos outros.
     }
 
 
@@ -291,4 +345,9 @@ public class MarketDataService {
     private record MarketAssetKey(AssetType type, Market market) {}
     private record AssetIdentifier(String ticker, String market,AssetType type) {}
     private record AssetToFetch(String ticker, Market market) {}
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private record ExchangeRateResponse(@JsonProperty("Realtime Currency Exchange Rate") ExchangeRateData exchangeRateData) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private record ExchangeRateData(@JsonProperty("5. Exchange Rate") BigDecimal exchangeRate) {}
 }
