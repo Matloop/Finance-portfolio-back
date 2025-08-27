@@ -21,10 +21,6 @@ public class PortfolioController {
         this.marketDataService = marketDataService;
     }
 
-    @GetMapping
-    public List<AssetPositionDto> getConsolidatedPortfolio() {
-        return portfolioService.getConsolidatedPortfolio();
-    }
 
     @PostMapping("/refresh")
     public ResponseEntity<Map<String, String>> refreshData() {
@@ -38,6 +34,7 @@ public class PortfolioController {
 
     @GetMapping("/dashboard")
     public ResponseEntity<PortfolioDashboardDto> getPortfolioDashboard() {
+        // A chamada ao método principal do serviço está correta.
         return ResponseEntity.ok(portfolioService.getPortfolioDashboardData());
     }
 

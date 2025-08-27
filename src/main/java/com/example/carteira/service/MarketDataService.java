@@ -140,35 +140,60 @@ public class MarketDataService {
 
     public void refreshAllMarketData() {
         logger.info("ATUALIZAÇÃO GERAL: Iniciando busca de dados para todos os ativos...");
-        Map<AssetType, List<Transaction>> transactionsByType = transactionRepository.findAll().stream()
-                .collect(Collectors.groupingBy(Transaction::getAssetType));
 
-        transactionsByType.forEach((assetType, transactions) -> {
-            // Usamos um Set para garantir que cada transação seja única
-            Set<Transaction> uniqueTransactions = new HashSet<>(transactions);
+        // Passo 1: Busca todas as transações de uma só vez.
+        List<Transaction> allTransactions = transactionRepository.findAll();
 
-            List<String> tickers = uniqueTransactions.stream()
-                    .map(t -> t.getTicker().toUpperCase())
-                    .toList();
-
-            // CORREÇÃO 1: Mapear diretamente para o enum, sem usar .name()
-            List<Market> markets = uniqueTransactions.stream()
-                    .map(Transaction::getMarket)
-                    .toList();
-
-            if (!tickers.isEmpty()) {
-                updatePriceForTickers(tickers, markets, assetType);
-            }
-        });
+        // Passo 2: Delega o trabalho de processamento para o método unificado.
+        if (!allTransactions.isEmpty()) {
+            updatePriceForTickers(allTransactions);
+        } else {
+            logger.info("Nenhuma transação na carteira para atualizar.");
+        }
     }
 
-    public void updatePriceForTickers(List<String> tickers, List<Market> markets, AssetType assetType) {
-        logger.info("ATUALIZAÇÃO SOB DEMANDA: Buscando preço para {} ({})", tickers, assetType);
-        switch (assetType) {
-            case STOCK -> fetchStockPrices(tickers, markets);
-            case CRYPTO -> fetchCryptoPrices(tickers);
-            default -> logger.warn("Tipo de ativo desconhecido: {}", assetType);
+    public void updatePriceForTickers(List<Transaction> transactions) {
+        if (transactions == null || transactions.isEmpty()) {
+            return;
         }
+        logger.info("Processando atualização de preço para {} transações...", transactions.size());
+
+        // Agrupa as transações por tipo, para chamar o fetcher correto.
+        Map<AssetType, List<Transaction>> groupedByType = transactions.stream()
+                .collect(Collectors.groupingBy(Transaction::getAssetType));
+
+        // Itera sobre cada grupo (STOCK, ETF, CRYPTO, etc.)
+        groupedByType.forEach((assetType, transactionList) -> {
+            switch (assetType) {
+                case STOCK, ETF -> {
+                    // PASSO CRÍTICO: Garantir que cada ativo seja único.
+                    // Se o usuário tem 5 compras de PETR4, só queremos buscar o preço uma vez.
+                    Set<AssetToFetch> uniqueAssets = transactionList.stream()
+                            .map(t -> new AssetToFetch(t.getTicker().toUpperCase(), t.getMarket()))
+                            .collect(Collectors.toSet());
+
+                    // Agora, extraímos as listas paralelas a partir do conjunto único.
+                    List<String> tickers = uniqueAssets.stream().map(AssetToFetch::ticker).toList();
+                    List<Market> markets = uniqueAssets.stream().map(AssetToFetch::market).toList();
+
+                    if (!tickers.isEmpty()) {
+                        fetchStockPrices(tickers, markets);
+                    }
+                }
+                case CRYPTO -> {
+                    // Para cripto, a unicidade é apenas pelo ticker.
+                    Set<String> uniqueTickers = transactionList.stream()
+                            .map(t -> t.getTicker().toUpperCase())
+                            .collect(Collectors.toSet());
+
+                    if (!uniqueTickers.isEmpty()) {
+                        // O método fetchCryptoPrices já espera uma List, então convertemos.
+                        fetchCryptoPrices(new ArrayList<>(uniqueTickers));
+                    }
+                }
+                default -> logger.warn("Tipo de ativo desconhecido para atualização: {}", assetType);
+            }
+        });
     }
 
     private void fetchStockPrices(List<String> tickers, List<Market> markets) {
