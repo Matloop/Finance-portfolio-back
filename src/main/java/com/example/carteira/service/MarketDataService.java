@@ -1,25 +1,17 @@
 package com.example.carteira.service;
 
 import com.example.carteira.model.Transaction;
+import com.example.carteira.model.dtos.AssetToFetch;
+import com.example.carteira.model.dtos.PriceData;
 import com.example.carteira.model.enums.AssetType;
-import com.example.carteira.model.enums.Market;
 import com.example.carteira.repository.TransactionRepository;
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
-import com.fasterxml.jackson.annotation.JsonProperty;
-import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.springframework.web.reactive.function.client.WebClient;
-import org.yaml.snakeyaml.error.Mark;
 import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
-import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -28,326 +20,180 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
- * Serviço completo e autocontido para buscar dados de mercado de diferentes fontes.
- * - Ações: Utiliza a API alphavantage.co (adaptado da Brapi).
- * - Criptomoedas: Utiliza a API coingecko.com.
+ * Serviço Orquestrador de Dados de Mercado.
  *
- * Funcionalidades:
- * 1. Atualização periódica em segundo plano de todos os ativos da carteira.
- * 2. Método público para forçar uma atualização de todos os ativos (para um "botão de atualizar").
- * 3. Método público para atualizar preços de ativos específicos sob demanda (ao adicionar um novo ativo).
+ * Responsabilidades:
+ * 1. Gerenciar um cache central de preços de ativos (`priceCache`).
+ * 2. Coordenar uma lista de provedores de dados (`MarketDataProvider`).
+ * 3. Inicializar todos os provedores na inicialização da aplicação.
+ * 4. Agendar uma tarefa recorrente para atualizar os preços de todos os ativos da carteira.
+ * 5. Delegar a busca de dados ao provedor correto para cada tipo de ativo.
  */
 @Service
 public class MarketDataService {
 
     private static final Logger logger = LoggerFactory.getLogger(MarketDataService.class);
 
-    // MUDANÇA: WebClient renomeado para refletir a nova API
-    private final WebClient alphaVantageWebClient;
-    private final WebClient coingeckoWebClient;
     private final TransactionRepository transactionRepository;
-    private BigDecimal usdToBrlRate = BigDecimal.ONE;
-
-    private static final Map<String, String> PRIORITY_MAP = Map.of(
-            "BTC", "bitcoin",
-            "ETH", "ethereum",
-            "USDT", "tether",
-            "BNB", "binancecoin",
-            "SOL", "solana",
-            "USDC", "usd-coin",
-            "XRP", "ripple",
-            "ADA", "cardano"
-    );
-
-    // MUDANÇA: Chave da API da Alpha Vantage
-    private final String alphaVantageApiKey;
-
+    private final List<MarketDataProvider> providers;
     private final Map<String, BigDecimal> priceCache = new ConcurrentHashMap<>();
-    //cache to map the id in coingecko
-    private final Map<String, String> tickerToCoingeckoIdCache = new ConcurrentHashMap<>();
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
 
     /**
-     * Construtor que injeta as dependências necessárias e configura os WebClients.
-     * O token da Alpha Vantage é lido do arquivo application.properties.
+     * Construtor que injeta todas as implementações de MarketDataProvider
+     * encontradas pelo Spring, além do repositório de transações.
      */
-    public MarketDataService(
-            WebClient.Builder webClientBuilder,
-            TransactionRepository transactionRepository,
-            // MUDANÇA: Injetando a chave da Alpha Vantage
-            @Value("${alphavantage.apikey}") String alphaVantageApiKey) {
-
+    public MarketDataService(TransactionRepository transactionRepository, List<MarketDataProvider> providers) {
         this.transactionRepository = transactionRepository;
-        this.alphaVantageApiKey = alphaVantageApiKey;
-
-        // MUDANÇA: Cliente configurado para a API da Alpha Vantage
-        this.alphaVantageWebClient = webClientBuilder
-                .baseUrl("https://www.alphavantage.co")
-                .build();
-
-        // Cliente para a API do CoinGecko (Criptomoedas) - SEM MUDANÇAS AQUI
-        this.coingeckoWebClient = webClientBuilder
-                .baseUrl("https://api.coingecko.com/api/v3")
-                .build();
+        this.providers = providers;
+        logger.info("MarketDataService carregado com {} provedor(es) de dados.", providers.size());
     }
+
+    /**
+     * Inicializa o serviço após a construção.
+     * Primeiro, inicializa todos os provedores de dados e, em caso de sucesso,
+     * agenda a atualização recorrente de preços.
+     */
+    // DENTRO DE MarketDataService.java
 
     @PostConstruct
     private void initialize() {
-        logger.info("Iniciando MarketDataService...");
-        populateCryptoIdCache()
-                .doOnSuccess(aVoid -> { // o argumento aqui é ignorado, mas necessário pela assinatura
-                    logger.info("Cache de IDs de Criptomoedas populado com sucesso!");
+        logger.info("Inicializando todos os provedores de dados...");
+
+        Flux.fromIterable(providers)
+                .flatMap(MarketDataProvider::initialize)
+                .then() // Aguarda a conclusão de todas as inicializações
+                .doOnSuccess(aVoid -> {
+                    logger.info("Todos os provedores foram inicializados com sucesso!");
                     logger.info("A primeira busca de dados de preços ocorrerá em 10 segundos.");
+
+                    // CORREÇÃO: Mova o agendador para DENTRO do doOnSuccess.
+                    // Isso garante que ele só será agendado DEPOIS que a inicialização (o .then())
+                    // for concluída com sucesso.
                     scheduler.scheduleAtFixedRate(this::refreshAllMarketData, 10, 300, TimeUnit.SECONDS);
                 })
                 .doOnError(error -> {
-                    logger.error("Falha ao popular o cache de IDs de Criptomoedas! O serviço pode não funcionar corretamente para criptoativos.", error);
-                    // Mesmo com erro, agenda a tarefa.
-                    scheduler.scheduleAtFixedRate(this::refreshAllMarketData, 10, 300, TimeUnit.SECONDS);
+                    logger.error("Falha ao inicializar um ou mais provedores! A atualização de preços não será agendada.", error);
+                    // DECISÃO DE DESIGN: Se a inicialização falhar, não agendamos a tarefa para evitar
+                    // executar com dados potencialmente incorretos.
                 })
-                .subscribe(); // Apenas "aciona" o Mono.
+                .subscribe();
     }
 
-
-    private Mono<Void> populateCryptoIdCache() {
-        logger.info("Populando caches");
-        tickerToCoingeckoIdCache.clear();
-        tickerToCoingeckoIdCache.putAll(PRIORITY_MAP);
-        logger.info("Cache de prioridade carregado com {} ativos.", PRIORITY_MAP.size());
-        return coingeckoWebClient.get()
-                .uri("/coins/list")
-                .retrieve()
-                .bodyToFlux(CoinGeckoCoin.class)
-                // Passo 1: Em vez de coletar para um mapa, colete todos os itens em uma lista.
-                // O Mono resultante será um Mono<List<CoinGeckoCoin>>.
-                // Passo 2: Quando a lista estiver pronta, use 'doOnNext' para processá-la.
-                .doOnNext(coin -> {
-                    // A chave é o símbolo em maiúsculas
-                    String symbol = coin.symbol().toUpperCase();
-                    // [MUDANÇA CRÍTICA] Usa putIfAbsent para não sobrescrever os prioritários.
-                    if (symbol != null && !symbol.isBlank()) {
-                        tickerToCoingeckoIdCache.putIfAbsent(symbol, coin.id());
-                    }
-                })
-                // Passo 3: Após o processamento, transforme o resultado de volta em um Mono<Void>.
-                .then();
-    }
+    /**
+     * Retorna o preço de um ativo específico do cache.
+     *
+     * @param ticker O ticker do ativo (ex: "PETR4").
+     * @return O preço em BigDecimal, ou BigDecimal.ZERO se não for encontrado.
+     */
     public BigDecimal getPrice(String ticker) {
         return priceCache.getOrDefault(ticker.toUpperCase(), BigDecimal.ZERO);
     }
 
+    /**
+     * Retorna uma visão não modificável de todo o cache de preços.
+     */
     public Map<String, BigDecimal> getAllPrices() {
         return Collections.unmodifiableMap(priceCache);
     }
 
+    /**
+     * Dispara a atualização de preços para todos os ativos presentes no banco de dados.
+     * Este é o método chamado pelo agendador.
+     */
     public void refreshAllMarketData() {
-        logger.info("ATUALIZAÇÃO GERAL: Iniciando busca de dados para todos os ativos...");
-
-        // Passo 1: Busca todas as transações de uma só vez.
+        logger.info("ATUALIZAÇÃO GERAL: Iniciando busca de dados para todos os ativos da carteira...");
         List<Transaction> allTransactions = transactionRepository.findAll();
 
-        // Passo 2: Delega o trabalho de processamento para o método unificado.
-        if (!allTransactions.isEmpty()) {
-            updatePriceForTickers(allTransactions);
-        } else {
+        if (allTransactions.isEmpty()) {
             logger.info("Nenhuma transação na carteira para atualizar.");
-        }
-    }
-
-    public void updatePriceForTickers(List<Transaction> transactions) {
-        if (transactions == null || transactions.isEmpty()) {
             return;
         }
-        logger.info("Processando atualização de preço para {} transações...", transactions.size());
 
-        // Agrupa as transações por tipo, para chamar o fetcher correto.
-        Map<AssetType, List<Transaction>> groupedByType = transactions.stream()
+        // Agrupa todas as transações por tipo de ativo (STOCK, CRYPTO, etc.)
+        Map<AssetType, List<Transaction>> groupedByType = allTransactions.stream()
                 .collect(Collectors.groupingBy(Transaction::getAssetType));
 
-        // Itera sobre cada grupo (STOCK, ETF, CRYPTO, etc.)
-        groupedByType.forEach((assetType, transactionList) -> {
-            switch (assetType) {
-                case STOCK, ETF -> {
-                    // PASSO CRÍTICO: Garantir que cada ativo seja único.
-                    // Se o usuário tem 5 compras de PETR4, só queremos buscar o preço uma vez.
-                    Set<AssetToFetch> uniqueAssets = transactionList.stream()
-                            .map(t -> new AssetToFetch(t.getTicker().toUpperCase(), t.getMarket()))
-                            .collect(Collectors.toSet());
+        // Para cada grupo, encontra o provedor correto e delega a busca de dados
+        groupedByType.forEach((assetType, transactions) -> {
+            // 1. Encontrar o provedor certo
+            Optional<MarketDataProvider> providerOptional = findProviderFor(assetType);
 
-                    // Agora, extraímos as listas paralelas a partir do conjunto único.
-                    List<String> tickers = uniqueAssets.stream().map(AssetToFetch::ticker).toList();
-                    List<Market> markets = uniqueAssets.stream().map(AssetToFetch::market).toList();
+            providerOptional.ifPresentOrElse(
+                    provider -> {
+                        // 2. Extrair os ativos únicos para não buscar o mesmo ticker várias vezes
+                        Set<AssetToFetch> uniqueAssets = transactions.stream()
+                                .map(t -> new AssetToFetch(t.getTicker().toUpperCase(), t.getMarket()))
+                                .collect(Collectors.toSet());
 
-                    if (!tickers.isEmpty()) {
-                        fetchStockPrices(tickers, markets);
-                    }
-                }
-                case CRYPTO -> {
-                    // Para cripto, a unicidade é apenas pelo ticker.
-                    Set<String> uniqueTickers = transactionList.stream()
-                            .map(t -> t.getTicker().toUpperCase())
-                            .collect(Collectors.toSet());
+                        logger.info("Usando o provedor '{}' para buscar {} ativo(s) do tipo {}",
+                                provider.getClass().getSimpleName(), uniqueAssets.size(), assetType);
 
-                    if (!uniqueTickers.isEmpty()) {
-                        // O método fetchCryptoPrices já espera uma List, então convertemos.
-                        fetchCryptoPrices(new ArrayList<>(uniqueTickers));
-                    }
-                }
-                default -> logger.warn("Tipo de ativo desconhecido para atualização: {}", assetType);
-            }
+                        // 3. Delegar a chamada e se inscrever no resultado
+                        provider.fetchPrices(new ArrayList<>(uniqueAssets))
+                                .subscribe(
+                                        this::updateCache, // onNext: chama o método para atualizar o cache
+                                        error -> logger.error("Erro no fluxo do provedor {}: {}", provider.getClass().getSimpleName(), error.getMessage()), // onError
+                                        () -> logger.info("Fluxo de preços para o tipo {} concluído.", assetType) // onComplete
+                                );
+                    },
+                    () -> logger.warn("Nenhum provedor de dados encontrado para o tipo de ativo: {}", assetType)
+            );
         });
     }
 
-    private Mono<Void> fetchUsdToBrlRate() {
-        logger.info("Buscando taxa de câmbio USD -> BRL...");
-        return alphaVantageWebClient.get()
-                .uri(uriBuilder -> uriBuilder
-                        .path("/query")
-                        .queryParam("function", "CURRENCY_EXCHANGE_RATE")
-                        .queryParam("from_currency", "USD")
-                        .queryParam("to_currency", "BRL")
-                        .queryParam("apikey", this.alphaVantageApiKey)
-                        .build())
-                .retrieve()
-                .bodyToMono(ExchangeRateResponse.class)
-                .map(ExchangeRateResponse::exchangeRateData)
-                .filter(Objects::nonNull)
-                .doOnSuccess(rateData -> {
-                    if (rateData.exchangeRate() != null) {
-                        this.usdToBrlRate = rateData.exchangeRate();
-                    } else {
-                        logger.warn("Não foi possível atualizar a taxa de câmbio. Usando o valor anterior: {}", this.usdToBrlRate);
-                    }
-                })
-                .doOnError(error -> logger.error("Erro ao buscar taxa de câmbio: {}", error.getMessage()))
-                .onErrorResume(e -> Mono.empty()) // Não quebra o fluxo se a busca de câmbio falhar
-                .then(); // Converte para Mono<Void> para indicar a conclusão
+    /**
+     * Atualiza o cache central com os dados de preço recebidos de um provedor.
+     * @param priceData O DTO contendo o ticker e o preço.
+     */
+    private void updateCache(PriceData priceData) {
+        priceCache.put(priceData.ticker().toUpperCase(), priceData.price());
+        logger.info("Cache atualizado: {} = {}", priceData.ticker().toUpperCase(), priceData.price());
     }
 
+    /**
+     * Encontra o primeiro provedor na lista que suporta o tipo de ativo fornecido.
+     * @param assetType O tipo de ativo (STOCK, CRYPTO, etc.).
+     * @return um Optional contendo o provedor, ou um Optional vazio se nenhum for encontrado.
+     */
+    private Optional<MarketDataProvider> findProviderFor(AssetType assetType) {
+        return providers.stream()
+                .filter(p -> p.supports(assetType))
+                .findFirst();
+    }
 
-    private void fetchStockPrices(List<String> tickers, List<Market> markets) {
-        if (tickers.size() != markets.size()) {
-            logger.error("Erro crítico: As listas de tickers e markets estão dessincronizadas.");
+    public void updatePricesForTransactions(List<Transaction> transactions) {
+        if (transactions == null || transactions.isEmpty()) {
+            logger.warn("A atualização de preços sob demanda foi chamada com uma lista de transações vazia.");
             return;
         }
+        logger.info("ATUALIZAÇÃO SOB DEMANDA: Iniciando busca para {} transação(ões).", transactions.size());
 
-        // A criação do AssetToFetch já estava correta, pois esperava um Market
-        List<AssetToFetch> assetsToFetch = new ArrayList<>();
-        for (int i = 0; i < tickers.size(); i++) {
-            assetsToFetch.add(new AssetToFetch(tickers.get(i), markets.get(i)));
-        }
+        // A lógica é idêntica à de refreshAllMarketData, mas opera sobre a lista fornecida
+        // em vez de buscar todas as transações do repositório.
+        Map<AssetType, List<Transaction>> groupedByType = transactions.stream()
+                .collect(Collectors.groupingBy(Transaction::getAssetType));
 
+        groupedByType.forEach((assetType, transactionList) -> {
+            Optional<MarketDataProvider> providerOptional = findProviderFor(assetType);
 
-        Flux.fromIterable(assetsToFetch)
-                .delayElements(Duration.ofSeconds(15))
-                .flatMap(this::fetchSingleStockPrice) // Agora passamos o objeto completo
-                .subscribe(
-                        quote -> {
-                            String ticker = quote.symbol().replace(".SA", "");
-                            priceCache.put(ticker.toUpperCase(), quote.price());
-                            logger.info("Cache de Ações atualizado: {} = {}", ticker.toUpperCase(), quote.price());
-                        },
-                        error -> logger.error("Erro no fluxo de busca de preços de ações: {}", error.getMessage())
-                );
+            providerOptional.ifPresentOrElse(
+                    provider -> {
+                        Set<AssetToFetch> uniqueAssets = transactionList.stream()
+                                .map(t -> new AssetToFetch(t.getTicker().toUpperCase(), t.getMarket()))
+                                .collect(Collectors.toSet());
+
+                        logger.info("Usando o provedor '{}' para buscar {} ativo(s) do tipo {} (sob demanda)",
+                                provider.getClass().getSimpleName(), uniqueAssets.size(), assetType);
+
+                        provider.fetchPrices(new ArrayList<>(uniqueAssets))
+                                .subscribe(
+                                        this::updateCache,
+                                        error -> logger.error("Erro no fluxo do provedor {}: {}", provider.getClass().getSimpleName(), error.getMessage())
+                                );
+                    },
+                    () -> logger.warn("Nenhum provedor de dados encontrado para o tipo de ativo: {}", assetType)
+            );
+        });
     }
-
-    private Mono<GlobalQuote> fetchSingleStockPrice(AssetToFetch asset) {
-        String tickerForApi;
-        if (asset.market() == Market.B3) {
-            tickerForApi = asset.ticker() + ".SA";
-        } else {
-            tickerForApi = asset.ticker();
-        }
-
-        return alphaVantageWebClient.get()
-                .uri(uriBuilder -> uriBuilder
-                        .path("/query")
-                        .queryParam("function", "GLOBAL_QUOTE")
-                        .queryParam("symbol", tickerForApi)
-                        .queryParam("apikey", this.alphaVantageApiKey)
-                        .build())
-                .retrieve()
-                .bodyToMono(AlphaVantageQuoteResponse.class)
-                // MUDANÇA CRÍTICA: Trocamos a combinação .map().filter() por um .flatMap() seguro.
-                .flatMap(response -> {
-                    // Verificamos se o campo 'quote' não é nulo.
-                    if (response.quote() != null) {
-                        // Se não for nulo, retornamos um Mono contendo o valor.
-                        return Mono.just(response.quote());
-                    } else {
-                        // Se for nulo (ex: limite de API atingido), retornamos um Mono vazio.
-                        // Isso sinaliza "nenhum valor" de forma segura, sem quebrar o fluxo.
-                        logger.warn("A resposta da API para {} não continha um 'Global Quote'. Provavelmente o limite de chamadas foi atingido.", asset.ticker());
-                        return Mono.empty();
-                    }
-                })
-                .map(quote -> {
-                    // A lógica de conversão de moeda continua a mesma.
-                    if (asset.market() == Market.US) {
-                        BigDecimal priceInUsd = quote.price();
-                        // Garante que a taxa de câmbio não seja nula ou zero para evitar erros.
-                        if (this.usdToBrlRate != null && this.usdToBrlRate.compareTo(BigDecimal.ZERO) > 0) {
-                            BigDecimal priceInBrl = priceInUsd.multiply(this.usdToBrlRate);
-                            logger.info("Convertendo {}: ${} -> R$ {}", asset.ticker(), priceInUsd.setScale(2, RoundingMode.HALF_UP), priceInBrl.setScale(2, RoundingMode.HALF_UP));
-                            return new GlobalQuote(quote.symbol(), priceInBrl);
-                        } else {
-                            logger.error("Taxa de câmbio USD/BRL inválida ({}). Não foi possível converter o preço de {}.", this.usdToBrlRate, asset.ticker());
-                            // Retorna o quote original para não quebrar, mas com log de erro.
-                            return quote;
-                        }
-                    }
-                    return quote;
-                })
-                .doOnError(error -> logger.error("Erro no fluxo reativo ao buscar preço para {}: {}", asset.ticker(), error.getMessage()))
-                .onErrorResume(e -> Mono.empty()); // Se um ticker falhar, não quebra o fluxo dos outros.
-    }
-
-
-    private void fetchCryptoPrices(List<String> tickers) {
-        String idsForApi = tickers.stream().map(this::mapTickerToCoingeckoId).filter(Objects::nonNull).collect(Collectors.joining(","));
-        coingeckoWebClient.get()
-                .uri(uriBuilder -> uriBuilder.path("/simple/price").queryParam("ids", idsForApi).queryParam("vs_currencies", "brl").build())
-                .retrieve()
-                .bodyToMono(JsonNode.class)
-                .subscribe(
-                        response -> tickers.forEach(ticker -> {
-                            String coingeckoId = mapTickerToCoingeckoId(ticker);
-                            if (response != null && response.has(coingeckoId) && response.get(coingeckoId).has("brl")) {
-                                BigDecimal price = new BigDecimal(response.get(coingeckoId).get("brl").asText());
-                                priceCache.put(ticker.toUpperCase(), price);
-                                logger.info("Cache de Cripto atualizado: {} = {}", ticker.toUpperCase(), price);
-                            } else {
-                                logger.warn("Não foi possível encontrar o preço para a cripto: {} (ID: {})", ticker, coingeckoId);
-                            }
-                        }),
-                        error -> logger.error("Erro ao buscar preços de cripto no CoinGecko: {}", error.getMessage())
-                );
-    }
-
-    private String mapTickerToCoingeckoId(String ticker) {
-        String id = tickerToCoingeckoIdCache.get(ticker.toUpperCase());
-        if (id == null) {
-            logger.warn("ID não encontrado");
-        }
-        return id;
-    }
-
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    private record AlphaVantageQuoteResponse(@JsonProperty("Global Quote") GlobalQuote quote) {}
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    private record GlobalQuote(
-            @JsonProperty("01. symbol") String symbol,
-            @JsonProperty("05. price") BigDecimal price) {}
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    private record CoinGeckoCoin(String id, String symbol, String name) {}
-    private record MarketAssetKey(AssetType type, Market market) {}
-    private record AssetIdentifier(String ticker, String market,AssetType type) {}
-    private record AssetToFetch(String ticker, Market market) {}
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    private record ExchangeRateResponse(@JsonProperty("Realtime Currency Exchange Rate") ExchangeRateData exchangeRateData) {}
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    private record ExchangeRateData(@JsonProperty("5. Exchange Rate") BigDecimal exchangeRate) {}
 }

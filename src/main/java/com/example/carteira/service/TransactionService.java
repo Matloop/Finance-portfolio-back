@@ -28,7 +28,7 @@ public class TransactionService {
         transaction.setPricePerUnit(dto.getPricePerUnit());
         transaction.setTransactionDate(dto.getTransactionDate());
         Transaction savedTransaction = transactionRepository.save(transaction);
-        marketDataService.updatePriceForTickers(List.of(savedTransaction));
+        marketDataService.updatePricesForTransactions(List.of(savedTransaction));
         return savedTransaction;
     }
 
