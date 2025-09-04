@@ -104,42 +104,16 @@ public class MarketDataService {
     public void refreshAllMarketData() {
         logger.info("ATUALIZAÇÃO GERAL: Iniciando busca de dados para todos os ativos da carteira...");
         List<Transaction> allTransactions = transactionRepository.findAll();
-
         if (allTransactions.isEmpty()) {
             logger.info("Nenhuma transação na carteira para atualizar.");
             return;
         }
+        // Chama o método unificado de atualização
+        updatePricesForTransactions(allTransactions);
+    }
 
-        // Agrupa todas as transações por tipo de ativo (STOCK, CRYPTO, etc.)
-        Map<AssetType, List<Transaction>> groupedByType = allTransactions.stream()
-                .collect(Collectors.groupingBy(Transaction::getAssetType));
-
-        // Para cada grupo, encontra o provedor correto e delega a busca de dados
-        groupedByType.forEach((assetType, transactions) -> {
-            // 1. Encontrar o provedor certo
-            Optional<MarketDataProvider> providerOptional = findProviderFor(assetType);
-
-            providerOptional.ifPresentOrElse(
-                    provider -> {
-                        // 2. Extrair os ativos únicos para não buscar o mesmo ticker várias vezes
-                        Set<AssetToFetch> uniqueAssets = transactions.stream()
-                                .map(t -> new AssetToFetch(t.getTicker().toUpperCase(), t.getMarket()))
-                                .collect(Collectors.toSet());
-
-                        logger.info("Usando o provedor '{}' para buscar {} ativo(s) do tipo {}",
-                                provider.getClass().getSimpleName(), uniqueAssets.size(), assetType);
-
-                        // 3. Delegar a chamada e se inscrever no resultado
-                        provider.fetchPrices(new ArrayList<>(uniqueAssets))
-                                .subscribe(
-                                        this::updateCache, // onNext: chama o método para atualizar o cache
-                                        error -> logger.error("Erro no fluxo do provedor {}: {}", provider.getClass().getSimpleName(), error.getMessage()), // onError
-                                        () -> logger.info("Fluxo de preços para o tipo {} concluído.", assetType) // onComplete
-                                );
-                    },
-                    () -> logger.warn("Nenhum provedor de dados encontrado para o tipo de ativo: {}", assetType)
-            );
-        });
+    public void updatePricesForTransactions(List<Transaction> transactions) {
+        updatePricesForTransactions(transactions, "ATUALIZAÇÃO SOB DEMANDA");
     }
 
     /**
@@ -156,43 +130,74 @@ public class MarketDataService {
      * @param assetType O tipo de ativo (STOCK, CRYPTO, etc.).
      * @return um Optional contendo o provedor, ou um Optional vazio se nenhum for encontrado.
      */
-    private Optional<MarketDataProvider> findProviderFor(AssetType assetType) {
+    private List<MarketDataProvider> findProvidersFor(AssetType assetType) {
         return providers.stream()
                 .filter(p -> p.supports(assetType))
-                .findFirst();
+                // Ordena a lista para que o provedor @Primary venha primeiro.
+                .sorted(Comparator.comparing(p -> !p.getClass().isAnnotationPresent(org.springframework.context.annotation.Primary.class)))
+                .collect(Collectors.toList());
     }
 
-    public void updatePricesForTransactions(List<Transaction> transactions) {
+    private void updatePricesForTransactions(List<Transaction> transactions, String logContext) {
         if (transactions == null || transactions.isEmpty()) {
-            logger.warn("A atualização de preços sob demanda foi chamada com uma lista de transações vazia.");
+            logger.warn("[{}] Chamada com uma lista de transações vazia.", logContext);
             return;
         }
-        logger.info("ATUALIZAÇÃO SOB DEMANDA: Iniciando busca para {} transação(ões).", transactions.size());
+        logger.info("[{}] Iniciando busca para {} transação(ões).", logContext, transactions.size());
 
-        // A lógica é idêntica à de refreshAllMarketData, mas opera sobre a lista fornecida
-        // em vez de buscar todas as transações do repositório.
         Map<AssetType, List<Transaction>> groupedByType = transactions.stream()
                 .collect(Collectors.groupingBy(Transaction::getAssetType));
 
         groupedByType.forEach((assetType, transactionList) -> {
-            Optional<MarketDataProvider> providerOptional = findProviderFor(assetType);
+            // 1. Encontrar a lista ordenada de provedores
+            List<MarketDataProvider> availableProviders = findProvidersFor(assetType);
 
-            providerOptional.ifPresentOrElse(
-                    provider -> {
-                        Set<AssetToFetch> uniqueAssets = transactionList.stream()
-                                .map(t -> new AssetToFetch(t.getTicker().toUpperCase(), t.getMarket()))
-                                .collect(Collectors.toSet());
+            if (availableProviders.isEmpty()) {
+                logger.warn("[{}] Nenhum provedor de dados encontrado para o tipo de ativo: {}", logContext, assetType);
+                return;
+            }
 
-                        logger.info("Usando o provedor '{}' para buscar {} ativo(s) do tipo {} (sob demanda)",
-                                provider.getClass().getSimpleName(), uniqueAssets.size(), assetType);
+            Set<AssetToFetch> uniqueAssets = transactionList.stream()
+                    .map(t -> new AssetToFetch(t.getTicker().toUpperCase(), t.getMarket()))
+                    .collect(Collectors.toSet());
 
-                        provider.fetchPrices(new ArrayList<>(uniqueAssets))
-                                .subscribe(
-                                        this::updateCache,
-                                        error -> logger.error("Erro no fluxo do provedor {}: {}", provider.getClass().getSimpleName(), error.getMessage())
-                                );
-                    },
-                    () -> logger.warn("Nenhum provedor de dados encontrado para o tipo de ativo: {}", assetType)
+            // 2. Construir a cadeia de fallback reativa
+            Flux<PriceData> priceFlux = Flux.empty();
+
+            for (int i = 0; i < availableProviders.size(); i++) {
+                final MarketDataProvider currentProvider = availableProviders.get(i);
+                final boolean isLastProvider = i == availableProviders.size() - 1;
+
+                Flux<PriceData> providerFlux = Flux.defer(() -> {
+                    logger.info("[{}] Tentando provedor '{}' para {} ativo(s) do tipo {}",
+                            logContext, currentProvider.getClass().getSimpleName(), uniqueAssets.size(), assetType);
+                    return currentProvider.fetchPrices(new ArrayList<>(uniqueAssets));
+                });
+
+                if (isLastProvider) {
+                    // Se for o último provedor, usamos o resultado dele, mesmo que seja vazio.
+                    priceFlux = priceFlux.switchIfEmpty(providerFlux);
+                } else {
+                    // Se não for o último, tentamos o próximo provedor se este falhar (retornar vazio).
+                    priceFlux = priceFlux.switchIfEmpty(providerFlux)
+                            .collectList() // Agrupa os resultados
+                            .flatMapMany(list -> {
+                                if (list.isEmpty()) {
+                                    // Se a lista estiver vazia, retorna um Fluxo vazio para acionar o próximo switchIfEmpty
+                                    logger.warn("[{}] Provedor '{}' não retornou dados. Tentando fallback...", logContext, currentProvider.getClass().getSimpleName());
+                                    return Flux.empty();
+                                }
+                                // Se houver dados, retorna o Fluxo com os dados
+                                return Flux.fromIterable(list);
+                            });
+                }
+            }
+
+            // 3. Inscrever-se no resultado final da cadeia de fallback
+            priceFlux.subscribe(
+                    this::updateCache,
+                    error -> logger.error("[{}] Erro irrecuperável no fluxo de busca para o tipo {}: {}", logContext, assetType, error.getMessage()),
+                    () -> logger.info("[{}] Fluxo de preços para o tipo {} concluído.", logContext, assetType)
             );
         });
     }
