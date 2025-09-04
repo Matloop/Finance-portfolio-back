@@ -197,7 +197,7 @@ public class PortfolioService {
         PortfolioSummaryDto summary = new PortfolioSummaryDto(totalHeritage, totalInvested, profitability);
 
         // --- Lógica das Porcentagens (Percentages) ---
-        Map<String, BigDecimal> percentages = calculatePercentages(allAssets, totalHeritage);
+        PortfolioPercentagesDto percentages = calculateUnifiedPercentages(allAssets, totalHeritage);
 
         // --- Lógica da Lista Agrupada (Assets) ---
         Map<String, List<AssetPositionDto>> assetsGrouped = allAssets.stream()
@@ -205,6 +205,32 @@ public class PortfolioService {
 
         // 3. RETORNA O DTO PAI COM TUDO DENTRO
         return new PortfolioDashboardDto(summary, percentages, assetsGrouped);
+    }
+
+    private PortfolioPercentagesDto calculateUnifiedPercentages(List<AssetPositionDto> allAssets, BigDecimal totalHeritage) {
+        if (totalHeritage.compareTo(BigDecimal.ZERO) <= 0) {
+            return new PortfolioPercentagesDto(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
+        }
+
+        BigDecimal stockTotal = BigDecimal.ZERO;
+        BigDecimal cryptoTotal = BigDecimal.ZERO;
+        BigDecimal fixedIncomeTotal = BigDecimal.ZERO;
+
+        for (AssetPositionDto asset : allAssets) {
+            switch (asset.getAssetType()) {
+                case STOCK, ETF -> stockTotal = stockTotal.add(asset.getCurrentValue());
+                case CRYPTO -> cryptoTotal = cryptoTotal.add(asset.getCurrentValue());
+                case FIXED_INCOME -> fixedIncomeTotal = fixedIncomeTotal.add(asset.getCurrentValue());
+            }
+        }
+
+        BigDecimal ह = BigDecimal.valueOf(100); // Constante 100
+
+        BigDecimal stockPercentage = stockTotal.divide(totalHeritage, 4, RoundingMode.HALF_UP).multiply(ह);
+        BigDecimal cryptoPercentage = cryptoTotal.divide(totalHeritage, 4, RoundingMode.HALF_UP).multiply(ह);
+        BigDecimal fixedIncomePercentage = fixedIncomeTotal.divide(totalHeritage, 4, RoundingMode.HALF_UP).multiply(ह);
+
+        return new PortfolioPercentagesDto(stockPercentage, cryptoPercentage, fixedIncomePercentage);
     }
 
     private String getAssetDisplayCategoryKey(AssetPositionDto asset) {

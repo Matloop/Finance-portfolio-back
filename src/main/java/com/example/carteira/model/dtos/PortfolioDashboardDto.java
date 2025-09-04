@@ -14,6 +14,6 @@ import java.util.Map;
 @AllArgsConstructor // Construtor prático
 public class PortfolioDashboardDto {
     private PortfolioSummaryDto summary;
-    private Map<String, BigDecimal> percentages;
+    private PortfolioPercentagesDto percentages;
     private Map<String, List<AssetPositionDto>> assets;
 }

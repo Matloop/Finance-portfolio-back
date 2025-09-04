@@ -5,6 +5,7 @@ import com.example.carteira.model.dtos.PriceData;
 import com.example.carteira.model.enums.AssetType;
 
 import com.example.carteira.model.enums.Market;
+import com.example.carteira.service.util.ExchangeRateService;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
@@ -19,6 +20,7 @@ import reactor.core.scheduler.Schedulers;
 
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.List;
 import java.util.Objects;
 
@@ -27,8 +29,14 @@ import java.util.Objects;
 public class WebScraperService implements MarketDataProvider{
     private static final Logger logger = LoggerFactory.getLogger(WebScraperService.class);
     private static final String BASE_URL = "https://finance.yahoo.com/quote/";
+    private final ExchangeRateService exchangeRateService;
+    private BigDecimal usdToBrlRate = BigDecimal.ONE;
     private static final String USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" +
             " (KHTML, like Gecko) Chrome/94.0.4606.81 Safari/537.36";
+
+    public WebScraperService(ExchangeRateService exchangeRateService) {
+        this.exchangeRateService = exchangeRateService;
+    }
 
     @Override
     public Flux<PriceData> fetchPrices(List<AssetToFetch> assetsToFetch) {
@@ -44,12 +52,16 @@ public class WebScraperService implements MarketDataProvider{
 
     @Override
     public Mono<Void> initialize() {
-        logger.info("Initializing Web Scraper");
-        return Mono.empty();
+        return exchangeRateService.fetchUsdToBrlRate()
+                .doOnSuccess(rate -> {
+                    if (rate != null) {
+                        this.usdToBrlRate = rate;
+                    } else {
+                        logger.warn("Não foi possível obter a taxa de câmbio do Yahoo. Usando o valor anterior/padrão: {}", this.usdToBrlRate);
+                    }
+                })
+                .then();
     }
-
-    // Dentro da classe YahooFinanceScraperProvider.java
-
 
     private Mono<PriceData> fetchSingleStockPrice(AssetToFetch asset) {
         // Usando o nome da classe do seu log.
@@ -95,6 +107,20 @@ public class WebScraperService implements MarketDataProvider{
                     }
                 })
                 .filter(Objects::nonNull)
+                .map(priceData -> {
+                    if (asset.market() == Market.US) {
+                        BigDecimal priceInUsd = priceData.price();
+                        if (this.usdToBrlRate.compareTo(BigDecimal.ZERO) > 0) {
+                            BigDecimal priceInBrl = priceInUsd.multiply(this.usdToBrlRate)
+                                    .setScale(2, RoundingMode.HALF_UP);
+                            logger.info("Convertendo {}: ${} -> R$ {}", asset.ticker(), priceInUsd, priceInBrl);
+                            return new PriceData(asset.ticker(), priceInBrl); // Retorna novo DTO com preço em BRL
+                        } else {
+                            logger.error("Taxa de câmbio USD/BRL inválida ({}). Não foi possível converter o preço de {}.", this.usdToBrlRate, asset.ticker());
+                        }
+                    }
+                    return priceData;
+                })
                 .subscribeOn(Schedulers.boundedElastic())
                 .doOnError(error -> logger.error("Erro no fluxo reativo para WebScraperService: {}", error.getMessage()))
                 .onErrorResume(e -> Mono.empty());

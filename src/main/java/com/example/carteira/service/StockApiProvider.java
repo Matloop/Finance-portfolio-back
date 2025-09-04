@@ -3,6 +3,7 @@ package com.example.carteira.service;
 import com.example.carteira.model.dtos.*; // <-- IMPORTANDO TODOS OS DTOS
 import com.example.carteira.model.enums.AssetType;
 import com.example.carteira.model.enums.Market;
+import com.example.carteira.service.util.ExchangeRateService;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,22 +22,21 @@ import java.util.Objects;
 // BUG 1 CORRIGIDO: Adicionado @Service
 @Service
 public class StockApiProvider implements MarketDataProvider {
-    private static final Logger logger = LoggerFactory.getLogger(StockApiProvider.class); // Logger corrigido
+    private static final Logger logger = LoggerFactory.getLogger(StockApiProvider.class);
 
     private final WebClient alphaVantageWebClient;
     private final String alphaVantageApiKey;
-    private BigDecimal usdToBrlRate = BigDecimal.ONE; // BUG 5: Mantido, mas será populado no initialize()
+    private BigDecimal usdToBrlRate = BigDecimal.ONE;
+    private final ExchangeRateService exchangeRateService;
 
-    // BUG 5 CORRIGIDO: Removido priceCache.
-
-    // BUG 2 CORRIGIDO: Removida vírgula extra no construtor.
     public StockApiProvider(
             @Value("${alphavantage.apikey}") String alphaVantageApiKey,
-            WebClient.Builder webClientBuilder) {
+            WebClient.Builder webClientBuilder, ExchangeRateService exchangeRateService) {
         this.alphaVantageApiKey = alphaVantageApiKey;
         this.alphaVantageWebClient = webClientBuilder
                 .baseUrl("https://www.alphavantage.co")
                 .build();
+        this.exchangeRateService = exchangeRateService;
     }
 
     // BUG 3 CORRIGIDO: Implementação do método supports.
@@ -48,7 +48,15 @@ public class StockApiProvider implements MarketDataProvider {
     // BUG 3 CORRIGIDO: Implementação do método initialize para buscar a taxa de câmbio.
     @Override
     public Mono<Void> initialize() {
-        return fetchUsdToBrlRate();
+        return exchangeRateService.fetchUsdToBrlRate()
+                .doOnSuccess(rate -> {
+                    if (rate != null) {
+                        this.usdToBrlRate = rate;
+                    } else {
+                        logger.warn("Não foi possível obter a taxa de câmbio do Yahoo. Usando o valor anterior/padrão: {}", this.usdToBrlRate);
+                    }
+                })
+                .then();
     }
 
     // BUG 3 CORRIGIDO: Implementação correta e reativa do fetchPrices.
