@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -195,43 +196,94 @@ public class PortfolioService {
             profitability = (totalHeritage.subtract(totalInvested)).divide(totalInvested, 4, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100));
         }
         PortfolioSummaryDto summary = new PortfolioSummaryDto(totalHeritage, totalInvested, profitability);
+        //faz a montagem das porcentagens
+        Map<String, AllocationNodeDto> percentages = buildAllocationTree(allAssets, totalHeritage);
 
-        // --- Lógica das Porcentagens (Percentages) ---
-        PortfolioPercentagesDto percentages = calculateUnifiedPercentages(allAssets, totalHeritage);
-
-        // --- Lógica da Lista Agrupada (Assets) ---
         Map<String, List<AssetPositionDto>> assetsGrouped = allAssets.stream()
-                .collect(Collectors.groupingBy(this::getAssetDisplayCategoryKey));
+                .collect(Collectors.groupingBy(asset -> asset.getAssetType().name(), Collectors.toList()));
 
-        // 3. RETORNA O DTO PAI COM TUDO DENTRO
         return new PortfolioDashboardDto(summary, percentages, assetsGrouped);
     }
 
-    private PortfolioPercentagesDto calculateUnifiedPercentages(List<AssetPositionDto> allAssets, BigDecimal totalHeritage) {
+    private Map<String, AllocationNodeDto> buildAllocationTree(List<AssetPositionDto> allAssets, BigDecimal totalHeritage) {
         if (totalHeritage.compareTo(BigDecimal.ZERO) <= 0) {
-            return new PortfolioPercentagesDto(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
+            return Map.of();
         }
 
-        BigDecimal stockTotal = BigDecimal.ZERO;
-        BigDecimal cryptoTotal = BigDecimal.ZERO;
-        BigDecimal fixedIncomeTotal = BigDecimal.ZERO;
+        // NÍVEL 1: Agrupar por Categoria Principal (Brazil, USA, Crypto)
+        Map<String, List<AssetPositionDto>> byCategory = allAssets.stream()
+                .collect(Collectors.groupingBy(asset -> {
+                    if (asset.getAssetType() == AssetType.CRYPTO) return "crypto";
+                    if (asset.getMarket() == Market.US) return "usa";
+                    return "brazil"; // B3 e Renda Fixa caem aqui
+                }));
 
-        for (AssetPositionDto asset : allAssets) {
-            switch (asset.getAssetType()) {
-                case STOCK, ETF -> stockTotal = stockTotal.add(asset.getCurrentValue());
-                case CRYPTO -> cryptoTotal = cryptoTotal.add(asset.getCurrentValue());
-                case FIXED_INCOME -> fixedIncomeTotal = fixedIncomeTotal.add(asset.getCurrentValue());
-            }
-        }
+        // Construir a árvore final
+        return byCategory.entrySet().stream()
+                .collect(Collectors.toMap(
+                        Map.Entry::getKey,
+                        entry -> {
+                            String categoryKey = entry.getKey();
+                            List<AssetPositionDto> categoryAssets = entry.getValue();
 
-        BigDecimal ह = BigDecimal.valueOf(100); // Constante 100
+                            BigDecimal categoryTotal = categoryAssets.stream()
+                                    .map(AssetPositionDto::getCurrentValue)
+                                    .reduce(BigDecimal.ZERO, BigDecimal::add);
 
-        BigDecimal stockPercentage = stockTotal.divide(totalHeritage, 4, RoundingMode.HALF_UP).multiply(ह);
-        BigDecimal cryptoPercentage = cryptoTotal.divide(totalHeritage, 4, RoundingMode.HALF_UP).multiply(ह);
-        BigDecimal fixedIncomePercentage = fixedIncomeTotal.divide(totalHeritage, 4, RoundingMode.HALF_UP).multiply(ह);
+                            BigDecimal categoryPercentage = categoryTotal.divide(totalHeritage, 4, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100));
 
-        return new PortfolioPercentagesDto(stockPercentage, cryptoPercentage, fixedIncomePercentage);
+                            // NÍVEL 2: Construir os filhos de cada categoria
+                            Map<String, AllocationNodeDto> children = buildChildrenForCategory(categoryKey, categoryAssets, categoryTotal);
+
+                            return new AllocationNodeDto(categoryPercentage, children);
+                        }
+                ));
     }
+
+    private Map<String, AllocationNodeDto> buildChildrenForCategory(String category, List<AssetPositionDto> assets, BigDecimal categoryTotal) {
+        if (category.equals("crypto")) {
+            // Para cripto, o próximo nível são os próprios ativos
+            return assets.stream().collect(Collectors.toMap(
+                    AssetPositionDto::getTicker,
+                    asset -> new AllocationNodeDto(
+                            asset.getCurrentValue().divide(categoryTotal, 4, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100))
+                    )
+            ));
+        }
+
+        // Para Brasil e EUA, o próximo nível é por tipo de ativo (Ações, ETFs, Renda Fixa)
+        Map<String, List<AssetPositionDto>> byAssetType = assets.stream()
+                .collect(Collectors.groupingBy(asset -> asset.getAssetType().name().toLowerCase()));
+
+        return byAssetType.entrySet().stream()
+                .collect(Collectors.toMap(
+                        Map.Entry::getKey,
+                        entry -> {
+                            String assetTypeKey = entry.getKey();
+                            List<AssetPositionDto> assetTypeAssets = entry.getValue();
+
+                            BigDecimal assetTypeTotal = assetTypeAssets.stream()
+                                    .map(AssetPositionDto::getCurrentValue)
+                                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+                            BigDecimal assetTypePercentage = assetTypeTotal.divide(categoryTotal, 4, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100));
+
+                            // NÍVEL 3: Construir os filhos para cada tipo de ativo (os tickers individuais)
+                            Map<String, AllocationNodeDto> grandchildren = assetTypeAssets.stream()
+                                    .collect(Collectors.toMap(
+                                            AssetPositionDto::getTicker,
+                                            asset -> new AllocationNodeDto(
+                                                    asset.getCurrentValue().divide(assetTypeTotal, 4, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100))
+                                            )
+                                    ));
+
+                            return new AllocationNodeDto(assetTypePercentage, grandchildren);
+                        }
+                ));
+    }
+
+
+
 
     private String getAssetDisplayCategoryKey(AssetPositionDto asset) {
         return asset.getAssetType().name().toLowerCase();
