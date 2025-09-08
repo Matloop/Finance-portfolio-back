@@ -15,5 +15,5 @@ import java.util.Map;
 public class PortfolioDashboardDto {
     private PortfolioSummaryDto summary;
     private Map<String, AllocationNodeDto> percentages;
-    private Map<String, List<AssetPositionDto>> assets;
+    private Map<String, List<AssetSubCategoryDto>> assets;
 }
