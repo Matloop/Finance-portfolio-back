@@ -18,7 +18,7 @@ public class AssetPositionDto {
     private BigDecimal profitOrLoss;
     private BigDecimal profitability;
     private Market market;
-    // Campos que só se aplicam a Ações/Cripto (podem ser nulos para Renda Fixa)
+    private BigDecimal currentPrice;
     private BigDecimal totalQuantity;
     private BigDecimal averagePrice;
 }

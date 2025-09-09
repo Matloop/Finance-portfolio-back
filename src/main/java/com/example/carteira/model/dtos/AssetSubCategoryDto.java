@@ -12,5 +12,5 @@ import java.util.List;
 public class AssetSubCategoryDto {
     String categoryName;
     BigDecimal totalValue;
-    List<AssetPositionDto> assets;
+    List<AssetTableRowDto> assets;
 }

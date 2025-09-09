@@ -11,10 +11,7 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
+import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -111,6 +108,8 @@ public class PortfolioService {
             return null; // A posição foi zerada.
         }
 
+
+
         BigDecimal averagePrice = totalCost.divide(totalBuyQuantity, 4, RoundingMode.HALF_UP);
         BigDecimal currentPrice = marketDataService.getPrice(key.ticker());
         BigDecimal currentValue = currentPrice.multiply(totalQuantity);
@@ -126,7 +125,8 @@ public class PortfolioService {
         position.setAssetType(key.assetType()); // Usa o tipo da chave
         position.setMarket(key.market());       // USA O MERCADO DA CHAVE (CORREÇÃO CRÍTICA)
         position.setTotalQuantity(totalQuantity);
-        position.setAveragePrice(averagePrice);
+        position.setAveragePrice(averagePrice.setScale(2, RoundingMode.HALF_UP));
+        position.setCurrentPrice(currentPrice.setScale(2, RoundingMode.HALF_UP));
         position.setTotalInvested(currentPositionCost.setScale(2, RoundingMode.HALF_UP));
         position.setCurrentValue(currentValue.setScale(2, RoundingMode.HALF_UP));
         position.setProfitOrLoss(profitOrLoss.setScale(2, RoundingMode.HALF_UP));
@@ -135,56 +135,77 @@ public class PortfolioService {
         return position;
     }
 
-    private Map<String, List<AssetSubCategoryDto>> getConsolidatedAssets() {
-        // Passo 1: Busca todas as transações em UMA ÚNICA query.
+    public Map<String, List<AssetSubCategoryDto>> getAssetHierarchy() {
+        // 1. Consolida todos os ativos em uma lista plana. (Sua lógica existente)
         List<Transaction> allTransactions = transactionRepository.findAll();
-
-        // Passo 2: Agrupa as transações em memória por sua chave única (ticker, tipo, mercado).
         Map<AssetKey, List<Transaction>> groupedTransactions = allTransactions.stream()
-                .filter(t -> t.getTicker() != null) // Filtro de segurança
+                .filter(t -> t.getTicker() != null)
                 .collect(Collectors.groupingBy(t -> new AssetKey(t.getTicker(), t.getAssetType(), t.getMarket())));
 
-        // Passo 3: Mapeia cada grupo de transações para uma Posição de Ativo (AssetPositionDto).
         Stream<AssetPositionDto> transactionalAssetsStream = groupedTransactions.entrySet().stream()
                 .map(entry -> calculateAssetPosition(entry.getKey(), entry.getValue()))
                 .filter(Objects::nonNull);
 
-        // Passo 4: Busca as posições de Renda Fixa.
         Stream<AssetPositionDto> fixedIncomeAssetsStream = fixedIncomeService.getAllFixedIncomePositions().stream();
+
         List<AssetPositionDto> allAssets = Stream.concat(transactionalAssetsStream, fixedIncomeAssetsStream)
                 .collect(Collectors.toList());
-        Map<String, Map<String, List<AssetPositionDto>>> groupedAndSubGroupedAssets = allAssets.stream()
+
+        // 2. Calcula o patrimônio total a partir da lista consolidada.
+        BigDecimal totalHeritage = allAssets.stream()
+                .map(AssetPositionDto::getCurrentValue)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        // 3. Agrupa e transforma em uma única e eficiente operação de stream.
+        return allAssets.stream()
                 .collect(Collectors.groupingBy(
-                        // Regra de classificação para o Nível 1 (Abas: Brasil, EUA, Cripto)
+                        // Nível 1: Classificador de Categoria Principal (as "abas")
                         asset -> {
                             if (asset.getAssetType() == AssetType.CRYPTO) return "Cripto";
                             if (asset.getMarket() == Market.US) return "EUA";
                             return "Brasil";
                         },
-                        // Coletor aninhado para o Nível 2 (Accordions: Ações, ETFs, Renda Fixa)
-                        Collectors.groupingBy(
-                                asset -> getFriendlyAssetTypeName(asset.getAssetType()) // Usa um helper para nomes amigáveis
+                        // Nível 2: Coletor aninhado que agrupa e DEPOIS transforma
+                        Collectors.collectingAndThen(
+                                // Agrupa por tipo de ativo (as "sanfonas")
+                                Collectors.groupingBy(asset -> getFriendlyAssetTypeName(asset.getAssetType())),
+                                // E ENTÃO, pega o mapa resultante e o transforma em uma List<AssetSubCategoryDto>
+                                subCategoryMap -> subCategoryMap.entrySet().stream()
+                                        .map(entry -> {
+                                            String subCategoryName = entry.getKey();
+                                            List<AssetPositionDto> assetsInSubCategory = entry.getValue();
+
+                                            BigDecimal subCategoryTotalValue = assetsInSubCategory.stream()
+                                                    .map(AssetPositionDto::getCurrentValue)
+                                                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+                                            // TRANSFORMAÇÃO FINAL: AssetPositionDto -> AssetTableRowDto
+                                            List<AssetTableRowDto> assetTableRows = assetsInSubCategory.stream()
+                                                    .map(asset -> {
+                                                        BigDecimal portfolioPercentage = BigDecimal.ZERO;
+                                                        if (totalHeritage.compareTo(BigDecimal.ZERO) > 0) {
+                                                            portfolioPercentage = asset.getCurrentValue()
+                                                                    .divide(totalHeritage, 4, RoundingMode.HALF_UP)
+                                                                    .multiply(BigDecimal.valueOf(100));
+                                                        }
+                                                        return new AssetTableRowDto(
+                                                                asset.getTicker(), asset.getName(), asset.getTotalQuantity(),
+                                                                asset.getAveragePrice(), asset.getCurrentPrice(),
+                                                                asset.getCurrentValue(), asset.getProfitability(),
+                                                                portfolioPercentage.setScale(2, RoundingMode.HALF_UP) // Formata aqui
+                                                        );
+                                                    })
+                                                    // Opcional: Ordena os ativos dentro da subcategoria pelo maior valor
+                                                    .sorted(Comparator.comparing(AssetTableRowDto::getCurrentValue).reversed())
+                                                    .collect(Collectors.toList());
+
+                                            return new AssetSubCategoryDto(subCategoryName, subCategoryTotalValue, assetTableRows);
+                                        })
+                                        // Opcional: Ordena as subcategorias pelo maior valor total
+                                        .sorted(Comparator.comparing(AssetSubCategoryDto::getTotalValue).reversed())
+                                        .collect(Collectors.toList())
                         )
                 ));
-        Map<String, List<AssetSubCategoryDto>> finalAssetMap = new HashMap<>();
-        groupedAndSubGroupedAssets.forEach((categoryName, subCategoryMap) -> {
-            List<AssetSubCategoryDto> subCategoryList = subCategoryMap.entrySet().stream()
-                    .map(entry -> {
-                        String subCategoryName = entry.getKey();
-                        List<AssetPositionDto> assetsInSubCategory = entry.getValue();
-
-                        BigDecimal totalValue = assetsInSubCategory.stream()
-                                .map(AssetPositionDto::getCurrentValue)
-                                .reduce(BigDecimal.ZERO, BigDecimal::add);
-
-                        return new AssetSubCategoryDto(subCategoryName, totalValue, assetsInSubCategory);
-                    })
-                    .collect(Collectors.toList());
-            finalAssetMap.put(categoryName, subCategoryList);
-        });
-
-        // Passo 5: Concatena os dois streams e retorna a lista final.
-        return finalAssetMap;
     }
 
     private String getFriendlyAssetTypeName(AssetType assetType) {
@@ -226,7 +247,6 @@ public class PortfolioService {
         // 1. CALCULA A LISTA COMPLETA DE POSIÇÕES DE FORMA EFICIENTE
         List<AssetPositionDto> allAssets = getConsolidatedPortfolio();
 
-        // 2. GERA OS DADOS PARA O DASHBOARD A PARTIR DA LISTA CONSOLIDADA
 
         // --- Lógica do Resumo (Summary) ---
         BigDecimal totalHeritage = allAssets.stream().map(AssetPositionDto::getCurrentValue).reduce(BigDecimal.ZERO, BigDecimal::add);
@@ -239,7 +259,7 @@ public class PortfolioService {
         //faz a montagem das porcentagens
         Map<String, AllocationNodeDto> percentages = buildAllocationTree(allAssets, totalHeritage);
 
-        Map<String, List<AssetSubCategoryDto>> assetsGrouped = buildAssetHierarchy(allAssets);
+        Map<String, List<AssetSubCategoryDto>> assetsGrouped = buildAssetHierarchy(allAssets,totalHeritage);
 
         return new PortfolioDashboardDto(summary, percentages, assetsGrouped);
     }
@@ -259,7 +279,7 @@ public class PortfolioService {
         return Stream.concat(transactionalAssetsStream, fixedIncomeAssetsStream).collect(Collectors.toList());
     }
 
-    private Map<String, List<AssetSubCategoryDto>> buildAssetHierarchy(List<AssetPositionDto> allAssets) {
+    private Map<String, List<AssetSubCategoryDto>> buildAssetHierarchy(List<AssetPositionDto> allAssets, BigDecimal totalHeritage) {
         // Passo 1: Agrupamento em dois níveis (Categoria Principal -> Tipo de Ativo -> Lista de Ativos)
         Map<String, Map<String, List<AssetPositionDto>>> groupedMap = allAssets.stream()
                 .collect(Collectors.groupingBy(
@@ -287,7 +307,29 @@ public class PortfolioService {
                                 .map(AssetPositionDto::getCurrentValue)
                                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
-                        return new AssetSubCategoryDto(subCategoryName, totalValue, assetsInSubCategory);
+                        List<AssetTableRowDto> assetTableRows = assetsInSubCategory.stream()
+                                .map(asset -> {
+                                    BigDecimal portfolioPercentage = BigDecimal.ZERO;
+                                    if (totalHeritage.compareTo(BigDecimal.ZERO) > 0) {
+                                        portfolioPercentage = asset.getCurrentValue()
+                                                .divide(totalHeritage, 4, RoundingMode.HALF_UP)
+                                                .multiply(BigDecimal.valueOf(100));
+                                    }
+
+                                    return new AssetTableRowDto(
+                                            asset.getTicker(),
+                                            asset.getName(),
+                                            asset.getTotalQuantity(),
+                                            asset.getAveragePrice(),
+                                            asset.getCurrentPrice(),
+                                            asset.getCurrentValue(),
+                                            asset.getProfitability(),
+                                            portfolioPercentage
+
+                                    );
+                                }).collect(Collectors.toList());
+
+                        return new AssetSubCategoryDto(subCategoryName, totalValue, assetTableRows);
                     })
                     .collect(Collectors.toList());
 
