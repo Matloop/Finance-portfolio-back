@@ -16,6 +16,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 import static com.example.carteira.model.enums.AssetType.FIXED_INCOME;
+import static com.example.carteira.model.enums.FixedIncomeIndex.SELIC;
 
 @Service
 public class FixedIncomeService {
@@ -40,12 +41,20 @@ public class FixedIncomeService {
 
     public FixedIncomeAsset addFixedIncome(CreateFixedIncomeDto dto) {
         FixedIncomeAsset asset = new FixedIncomeAsset();
+
         asset.setName(dto.getName());
         asset.setInvestedAmount(dto.getInvestedAmount());
         asset.setInvestmentDate(dto.getInvestmentDate());
         asset.setDailyLiquid(dto.isDailyLiquid());
         asset.setMaturityDate(dto.getMaturityDate());
         asset.setIndexType(dto.getIndexType());
+        if(asset.getIndexType().equals(SELIC)) {
+            asset.setContractedRate(BigDecimal.valueOf(99));
+            return fixedIncomeRepository.save(asset);
+        }
+        if(asset.getContractedRate() == null) {
+            asset.setContractedRate(BigDecimal.valueOf(100));
+        }
         asset.setContractedRate(dto.getContractedRate());
         return fixedIncomeRepository.save(asset);
     }

@@ -34,6 +34,5 @@ public class CreateFixedIncomeDto {
     @NotNull(message = "O tipo de indexador não pode ser nulo.")
     private FixedIncomeIndex indexType;
 
-    @NotNull(message = "A taxa contratada não pode ser nula.")
     private BigDecimal contractedRate;
 }
