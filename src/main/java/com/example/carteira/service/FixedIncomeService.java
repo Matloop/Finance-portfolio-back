@@ -48,16 +48,29 @@ public class FixedIncomeService {
         asset.setDailyLiquid(dto.isDailyLiquid());
         asset.setMaturityDate(dto.getMaturityDate());
         asset.setIndexType(dto.getIndexType());
-        if(asset.getIndexType().equals(SELIC)) {
-            asset.setContractedRate(BigDecimal.valueOf(99));
-            return fixedIncomeRepository.save(asset);
+
+        // --- LÓGICA DE ATRIBUIÇÃO DA TAXA CORRIGIDA E SIMPLIFICADA ---
+
+        BigDecimal rateToSet;
+
+        // 1. Se o indexador for SELIC, o rendimento é 100% da taxa Selic.
+        if (dto.getIndexType() == SELIC) {
+            rateToSet = new BigDecimal("100");
         }
-        if(asset.getContractedRate() == null) {
-            asset.setContractedRate(BigDecimal.valueOf(100));
+        // 2. Para outros indexadores (CDI, IPCA, etc.)...
+        else {
+            // Se o usuário forneceu uma taxa (ex: 110% do CDI), usamos a taxa dele.
+            // Se o campo veio nulo/vazio, assumimos o padrão de 100%.
+            rateToSet = (dto.getContractedRate() != null)
+                    ? dto.getContractedRate()
+                    : new BigDecimal("100");
         }
-        asset.setContractedRate(dto.getContractedRate());
+
+        asset.setContractedRate(rateToSet);
+
         return fixedIncomeRepository.save(asset);
     }
+
 
     public void deleteFixedIncome(Long id) {
         fixedIncomeRepository.deleteById(id);
@@ -100,8 +113,9 @@ public class FixedIncomeService {
         if (!endDate.isAfter(startDate)) return asset.getInvestedAmount();
 
         return switch (asset.getIndexType()) {
-            case CDI -> calculateCdiGrossValue(asset, startDate, endDate);
+            case CDI, SELIC -> calculateCdiGrossValue(asset, startDate, endDate);
             case PRE_FIXED -> calculatePrefixedGrossValue(asset, startDate, endDate);
+
             default -> asset.getInvestedAmount();
         };
     }
