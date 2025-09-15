@@ -12,6 +12,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import com.example.carteira.model.dtos.CoinGeckoCoin;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -37,6 +38,11 @@ public class CryptoApiProvider implements MarketDataProvider {
     @Override
     public boolean supports(AssetType assetType) {
         return assetType == AssetType.CRYPTO;
+    }
+
+    @Override
+    public Mono<PriceData> fetchHistoricalPrice(AssetToFetch assetToFetch, LocalDate date) {
+        return null;
     }
 
     @Override

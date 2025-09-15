@@ -27,6 +27,9 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Objects;
 
@@ -105,6 +108,97 @@ public class WebScraperService implements MarketDataProvider {
     }
 
     @Override
+    public Mono<PriceData> fetchHistoricalPrice(AssetToFetch asset, LocalDate date) {
+        // A API nos dá dados diários, então precisamos encontrar o mais próximo da data solicitada.
+        // A melhor abordagem é pegar os dados do último ano e encontrar a data.
+
+        // Primeiro, precisamos do ticker canônico (ex: ^GSPC)
+        return findCanonicalTicker(asset)
+                .flatMap(canonicalTicker -> {
+                    logger.info("Buscando preço histórico para {} ({}) na data {}", asset.ticker(), canonicalTicker, date);
+
+                    return webClient.get()
+                            .uri(uriBuilder -> uriBuilder
+                                    .path("/v8/finance/chart/" + canonicalTicker)
+                                    .queryParam("range", "1y") // Pega dados do último ano
+                                    .queryParam("interval", "1d") // com granularidade diária
+                                    .build())
+                            .retrieve()
+                            .bodyToMono(YahooChartResponse.class)
+                            .map(response -> {
+                                // Lógica para encontrar o preço mais próximo da data solicitada
+                                if (response != null && response.chart() != null && !response.chart().result().isEmpty()) {
+                                    ChartData data = response.chart().result().get(0);
+                                    List<Long> timestamps = data.timestamp();
+                                    List<BigDecimal> prices = data.indicators().quote().get(0).close();
+
+                                    if (timestamps != null && prices != null && timestamps.size() == prices.size()) {
+                                        // Encontra o índice do timestamp mais próximo da data desejada
+                                        for (int i = timestamps.size() - 1; i >= 0; i--) {
+                                            LocalDate candleDate = Instant.ofEpochSecond(timestamps.get(i)).atZone(ZoneOffset.UTC).toLocalDate();
+                                            if (!candleDate.isAfter(date)) {
+                                                BigDecimal price = prices.get(i);
+                                                if(price != null) {
+                                                    return new PriceData(asset.ticker(), price);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                return null; // Retorna nulo se não encontrar
+                            });
+                })
+                .filter(Objects::nonNull)
+                .onErrorResume(e -> {
+                    logger.error("Erro ao buscar dados do gráfico histórico para {}: {}", asset.ticker(), e.getMessage());
+                    return Mono.empty();
+                });
+    }
+
+    private Mono<String> findCanonicalTicker(AssetToFetch asset) {
+        final String searchTerm = asset.ticker();
+
+        // Se o ticker já parece ser um ticker válido (não contém espaços), podemos tentar usá-lo diretamente.
+        // Esta é uma otimização para evitar uma chamada de busca desnecessária para tickers simples como "PETR4".
+        if (!searchTerm.contains(" ") && searchTerm.length() < 10) {
+            // Para ativos brasileiros, garantimos o sufixo. Índices como ^BVSP não entram aqui.
+            if (asset.market() == Market.B3 && !searchTerm.contains(".")) {
+                return Mono.just(searchTerm + ".SA");
+            }
+            return Mono.just(searchTerm); // Assume que é um ticker válido (ex: AAPL, ^GSPC)
+        }
+
+        logger.info("Termo '{}' parece ser um nome. Buscando ticker canônico...", searchTerm);
+
+        // Lógica de busca via API (a mesma que já desenvolvemos)
+        return this.webClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/v1/finance/search")
+                        .queryParam("q", searchTerm)
+                        .build())
+                .retrieve()
+                .bodyToMono(YahooSearchResponse.class)
+                .flatMap(response -> {
+                    if (response.quotes() == null || response.quotes().isEmpty()) {
+                        logger.warn("Nenhum resultado encontrado na API de busca do Yahoo para o termo: {}", searchTerm);
+                        return Mono.empty();
+                    }
+                    // Filtra por INDEX se possível, senão pega o primeiro resultado
+                    String foundTicker = response.quotes().stream()
+                            .filter(q -> "INDEX".equalsIgnoreCase(q.quoteType()))
+                            .findFirst()
+                            .map(YahooQuote::symbol)
+                            .orElse(response.quotes().get(0).symbol());
+
+                    logger.info("Busca via API encontrou o ticker canônico: {} para o termo '{}'", foundTicker, searchTerm);
+                    return Mono.just(foundTicker);
+                })
+                .doOnError(error -> logger.error("Erro na API de busca ao procurar por {}: {}", searchTerm, error.getMessage()))
+                .onErrorResume(e -> Mono.empty());
+    }
+
+
+    @Override
     public Flux<PriceData> fetchPrices(List<AssetToFetch> assetsToFetch) {
         if (assetsToFetch.isEmpty()) return Flux.empty();
         return Flux.fromIterable(assetsToFetch)
@@ -181,4 +275,18 @@ public class WebScraperService implements MarketDataProvider {
     @JsonIgnoreProperties(ignoreUnknown = true)
     private record YahooQuote(String symbol, String shortname, String quoteType) {}
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private record YahooChartResponse(ChartResult chart) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private record ChartResult(@JsonProperty("result") List<ChartData> result) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private record ChartData(List<Long> timestamp, ChartIndicators indicators) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private record ChartIndicators(@JsonProperty("quote") List<QuoteData> quote) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private record QuoteData(@JsonProperty("close") List<BigDecimal> close) {}
 }

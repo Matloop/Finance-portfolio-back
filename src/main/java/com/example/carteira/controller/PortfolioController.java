@@ -37,6 +37,11 @@ public class PortfolioController {
         // A chamada ao método principal do serviço está correta.
         return ResponseEntity.ok(portfolioService.getPortfolioDashboardData());
     }
+    @GetMapping("/evolution")
+    public ResponseEntity<PortfolioEvolutionDto> getPortfolioEvolution() {
+        return ResponseEntity.ok(portfolioService.getPortfolioEvolutionData());
+    }
+
 
 
 }

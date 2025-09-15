@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -206,6 +207,126 @@ public class PortfolioService {
                                         .collect(Collectors.toList())
                         )
                 ));
+    }
+
+    public PortfolioEvolutionDto getPortfolioEvolutionData() {
+        // 1. Define os 13 pontos no tempo (o primeiro dia dos últimos 12 meses + a data de hoje).
+        List<LocalDate> dates = new ArrayList<>();
+        LocalDate today = LocalDate.now();
+        for (int i = 0; i < 12; i++) {
+            dates.add(today.minusMonths(i).withDayOfMonth(1));
+        }
+        Collections.reverse(dates); // Ordena do mais antigo para o mais recente
+        if (!dates.contains(today)) {
+            dates.add(today); // Adiciona o dia de hoje para o ponto mais atual
+        }
+
+        // 2. Busca TODAS as transações de uma vez para otimizar.
+        List<Transaction> allTransactions = transactionRepository.findAll();
+
+        // 3. Para cada data, recalcula o estado da carteira e cria um ponto de dados.
+        List<PortfolioEvolutionPointDto> evolutionPoints = dates.stream().map(date -> {
+            // Filtra apenas transações que ocorreram ATÉ a data do "snapshot".
+            List<Transaction> transactionsUpToDate = allTransactions.stream()
+                    .filter(t -> !t.getTransactionDate().isAfter(date))
+                    .collect(Collectors.toList());
+
+            // Calcula as posições dos ativos como elas eram naquela data.
+            List<AssetPositionDto> historicalPositions = getHistoricalPortfolio(transactionsUpToDate, date);
+
+            // Calcula os totais para aquela data.
+            BigDecimal patrimonio = historicalPositions.stream()
+                    .map(AssetPositionDto::getCurrentValue)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+            BigDecimal valorAplicado = historicalPositions.stream()
+                    .map(AssetPositionDto::getTotalInvested)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+            return new PortfolioEvolutionPointDto(
+                    date.format(DateTimeFormatter.ofPattern("MM/yy")), // Formato "09/25"
+                    patrimonio.setScale(2, RoundingMode.HALF_UP),
+                    valorAplicado.setScale(2, RoundingMode.HALF_UP)
+            );
+        }).collect(Collectors.toList());
+
+        return new PortfolioEvolutionDto(evolutionPoints);
+    }
+
+    private List<AssetPositionDto> getHistoricalPortfolio(List<Transaction> transactions, LocalDate calculationDate) {
+        Map<AssetKey, List<Transaction>> groupedTransactions = transactions.stream()
+                .filter(t -> t.getTicker() != null)
+                .collect(Collectors.groupingBy(t -> new AssetKey(t.getTicker(), t.getAssetType(), t.getMarket())));
+
+        // Usa parallelStream para acelerar a busca de múltiplos preços históricos em paralelo.
+        Stream<AssetPositionDto> transactionalAssetsStream = groupedTransactions.entrySet().parallelStream()
+                .map(entry -> calculateSingleHistoricalPosition(entry.getKey(), entry.getValue(), calculationDate))
+                .filter(Objects::nonNull);
+
+        // NOTA: Para uma solução 100% completa, seu FixedIncomeService precisaria de um método
+        // que calcule o valor para uma data no passado.
+        // Stream<AssetPositionDto> fixedIncomeAssetsStream = fixedIncomeService.getAllFixedIncomePositionsForDate(calculationDate).stream();
+
+        return transactionalAssetsStream.collect(Collectors.toList());
+        // return Stream.concat(transactionalAssetsStream, fixedIncomeAssetsStream).collect(Collectors.toList());
+    }
+
+    private AssetPositionDto calculateSingleHistoricalPosition(AssetKey key, List<Transaction> transactions, LocalDate calculationDate) {
+        // 1. Calcula quantidade e preço médio (lógica idêntica ao cálculo de posição atual).
+        BigDecimal totalQuantity = BigDecimal.ZERO;
+        BigDecimal totalCost = BigDecimal.ZERO;
+        BigDecimal totalBuyQuantity = BigDecimal.ZERO;
+
+        for (Transaction t : transactions) {
+            if (t.getTransactionType() == TransactionType.BUY) {
+                totalCost = totalCost.add(t.getQuantity().multiply(t.getPricePerUnit()));
+                totalQuantity = totalQuantity.add(t.getQuantity());
+                totalBuyQuantity = totalBuyQuantity.add(t.getQuantity());
+            } else {
+                totalQuantity = totalQuantity.subtract(t.getQuantity());
+            }
+        }
+        if (totalQuantity.compareTo(BigDecimal.ZERO) <= 0) return null;
+        BigDecimal averagePrice = totalCost.divide(totalBuyQuantity, 4, RoundingMode.HALF_UP);
+
+        // 2. Encontra o provedor de dados correto (lógica desacoplada).
+        MarketDataProvider provider = marketDataService.findProvidersFor(key.assetType())
+                .stream().findFirst().orElse(null);
+        if (provider == null) {
+            return null;
+        }
+
+        // 3. Busca o preço HISTÓRICO usando o provedor encontrado.
+        // .block() é usado aqui pois estamos em um stream paralelo (não reativo).
+        PriceData historicalPriceData = provider
+                .fetchHistoricalPrice(new AssetToFetch(key.ticker(), key.market()), calculationDate)
+                .block();
+
+        if (historicalPriceData == null) {
+            return null; // Não podemos calcular a posição sem o preço.
+        }
+
+        // 4. Monta o DTO com os valores calculados para aquela data.
+        BigDecimal historicalPrice = historicalPriceData.price();
+        BigDecimal currentValue = historicalPrice.multiply(totalQuantity);
+        BigDecimal currentPositionCost = totalQuantity.multiply(averagePrice);
+        BigDecimal profitOrLoss = currentValue.subtract(currentPositionCost);
+        BigDecimal profitability = currentPositionCost.compareTo(BigDecimal.ZERO) > 0 ?
+                profitOrLoss.divide(currentPositionCost, 4, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100)) :
+                BigDecimal.ZERO;
+
+        AssetPositionDto position = new AssetPositionDto();
+        position.setTicker(key.ticker());
+        position.setAssetType(key.assetType());
+        position.setMarket(key.market());
+        position.setTotalQuantity(totalQuantity);
+        position.setAveragePrice(averagePrice);
+        position.setCurrentPrice(historicalPrice); // O "preço atual" neste contexto é o preço histórico.
+        position.setTotalInvested(currentPositionCost);
+        position.setCurrentValue(currentValue);
+        position.setProfitOrLoss(profitOrLoss);
+        position.setProfitability(profitability);
+        return position;
     }
 
     private String getFriendlyAssetTypeName(AssetType assetType) {

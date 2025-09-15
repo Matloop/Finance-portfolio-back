@@ -16,6 +16,7 @@ import reactor.core.publisher.Mono;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Duration;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Objects;
 
@@ -43,6 +44,13 @@ public class StockApiProvider implements MarketDataProvider {
     @Override
     public boolean supports(AssetType assetType) {
         return assetType == AssetType.STOCK || assetType == AssetType.ETF;
+    }
+
+    @Override
+    public Mono<PriceData> fetchHistoricalPrice(AssetToFetch asset, LocalDate date) {
+        logger.warn("A busca de preços históricos não é suportada pelo StockApiProvider (Alpha Vantage) no momento.");
+        // Retorna um Mono vazio para sinalizar que não há resultado, sem quebrar a aplicação.
+        return Mono.empty();
     }
 
     // BUG 3 CORRIGIDO: Implementação do método initialize para buscar a taxa de câmbio.
