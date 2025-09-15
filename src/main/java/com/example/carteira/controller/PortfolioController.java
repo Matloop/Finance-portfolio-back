@@ -27,10 +27,6 @@ public class PortfolioController {
         marketDataService.refreshAllMarketData();
         return ResponseEntity.ok(Map.of("message", "A atualização dos dados de mercado foi iniciada."));
     }
-    @GetMapping("/summary")
-    public ResponseEntity<PortfolioSummaryDto> getPortfolioSummary() {
-        return ResponseEntity.ok(portfolioService.getPortfolioSummary());
-    }
 
     @GetMapping("/dashboard")
     public ResponseEntity<PortfolioDashboardDto> getPortfolioDashboard() {
