@@ -6,6 +6,9 @@ import com.example.carteira.model.enums.AssetType;
 import com.example.carteira.model.enums.Market;
 import com.example.carteira.model.enums.TransactionType;
 import com.example.carteira.repository.TransactionRepository;
+import com.example.carteira.service.util.ExchangeRateService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -24,13 +27,16 @@ public class PortfolioService {
     private final TransactionRepository transactionRepository;
     private final MarketDataService marketDataService;
     private final FixedIncomeService fixedIncomeService;
+    private final ExchangeRateService exchangeRateService;
+    private static final Logger logger = LoggerFactory.getLogger(PortfolioService.class);
 
     public PortfolioService(TransactionRepository transactionRepository,
                             MarketDataService marketDataService,
-                            FixedIncomeService fixedIncomeService) {
+                            FixedIncomeService fixedIncomeService, ExchangeRateService exchangeRateService) {
         this.transactionRepository = transactionRepository;
         this.marketDataService = marketDataService;
         this.fixedIncomeService = fixedIncomeService;
+        this.exchangeRateService = exchangeRateService;
     }
 
     private AssetPositionDto consolidateTicker(String ticker) {
@@ -234,13 +240,16 @@ public class PortfolioService {
             // Calcula as posições dos ativos como elas eram naquela data.
             List<AssetPositionDto> historicalPositions = getHistoricalPortfolio(transactionsUpToDate, date);
 
-            // Calcula os totais para aquela data.
             BigDecimal patrimonio = historicalPositions.stream()
+                    .filter(Objects::nonNull) // Garante que a posição não é nula
                     .map(AssetPositionDto::getCurrentValue)
+                    .filter(Objects::nonNull) // Garante que o valor não é nulo
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
 
             BigDecimal valorAplicado = historicalPositions.stream()
+                    .filter(Objects::nonNull) // Garante que a posição não é nula
                     .map(AssetPositionDto::getTotalInvested)
+                    .filter(Objects::nonNull) // Garante que o valor não é nulo
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
 
             return new PortfolioEvolutionPointDto(
@@ -272,11 +281,10 @@ public class PortfolioService {
     }
 
     private AssetPositionDto calculateSingleHistoricalPosition(AssetKey key, List<Transaction> transactions, LocalDate calculationDate) {
-        // 1. Calcula quantidade e preço médio (lógica idêntica ao cálculo de posição atual).
+        // 1. Lógica de quantidade e preço médio (sem alterações)
         BigDecimal totalQuantity = BigDecimal.ZERO;
         BigDecimal totalCost = BigDecimal.ZERO;
         BigDecimal totalBuyQuantity = BigDecimal.ZERO;
-
         for (Transaction t : transactions) {
             if (t.getTransactionType() == TransactionType.BUY) {
                 totalCost = totalCost.add(t.getQuantity().multiply(t.getPricePerUnit()));
@@ -289,25 +297,38 @@ public class PortfolioService {
         if (totalQuantity.compareTo(BigDecimal.ZERO) <= 0) return null;
         BigDecimal averagePrice = totalCost.divide(totalBuyQuantity, 4, RoundingMode.HALF_UP);
 
-        // 2. Encontra o provedor de dados correto (lógica desacoplada).
+        // 2. Encontra o provedor de dados correto (sem alterações)
         MarketDataProvider provider = marketDataService.findProvidersFor(key.assetType())
                 .stream().findFirst().orElse(null);
-        if (provider == null) {
-            return null;
-        }
+        if (provider == null) return null;
 
-        // 3. Busca o preço HISTÓRICO usando o provedor encontrado.
-        // .block() é usado aqui pois estamos em um stream paralelo (não reativo).
+        // 3. Busca o preço HISTÓRICO do ativo
         PriceData historicalPriceData = provider
                 .fetchHistoricalPrice(new AssetToFetch(key.ticker(), key.market()), calculationDate)
                 .block();
-
         if (historicalPriceData == null) {
-            return null; // Não podemos calcular a posição sem o preço.
+            return null;
         }
 
-        // 4. Monta o DTO com os valores calculados para aquela data.
         BigDecimal historicalPrice = historicalPriceData.price();
+
+        // 4. ***** CORREÇÃO: CONVERTE O PREÇO SE FOR UM ATIVO EM USD *****
+        if (key.market() == Market.US) {
+            BigDecimal usdToBrlRate = exchangeRateService.fetchHistoricalUsdToBrlRate(calculationDate).block();
+
+            if (usdToBrlRate != null && usdToBrlRate.compareTo(BigDecimal.ZERO) > 0) {
+                // Converte o preço histórico
+                historicalPrice = historicalPrice.multiply(usdToBrlRate);
+                // E TAMBÉM CONVERTE O PREÇO MÉDIO DE CUSTO
+                averagePrice = averagePrice.multiply(usdToBrlRate);
+            } else {
+                logger.warn("Não foi possível obter a taxa de câmbio histórica para a data {}. O valor de {} será ignorado.",
+                        calculationDate, key.ticker());
+                return null;
+            }
+        }
+
+        // 5. Monta o DTO com o preço já em BRL
         BigDecimal currentValue = historicalPrice.multiply(totalQuantity);
         BigDecimal currentPositionCost = totalQuantity.multiply(averagePrice);
         BigDecimal profitOrLoss = currentValue.subtract(currentPositionCost);
@@ -321,7 +342,7 @@ public class PortfolioService {
         position.setMarket(key.market());
         position.setTotalQuantity(totalQuantity);
         position.setAveragePrice(averagePrice);
-        position.setCurrentPrice(historicalPrice); // O "preço atual" neste contexto é o preço histórico.
+        position.setCurrentPrice(historicalPrice);
         position.setTotalInvested(currentPositionCost);
         position.setCurrentValue(currentValue);
         position.setProfitOrLoss(profitOrLoss);

@@ -2,6 +2,10 @@ package com.example.carteira.service;
 
 import com.example.carteira.model.dtos.AssetToFetch;
 import com.example.carteira.model.dtos.PriceData;
+import com.example.carteira.model.dtos.yahooscraper.ChartDataDto;
+import com.example.carteira.model.dtos.yahooscraper.YahooChartResponseDto;
+import com.example.carteira.model.dtos.yahooscraper.YahooQuoteDto;
+import com.example.carteira.model.dtos.yahooscraper.YahooSearchResponseDto;
 import com.example.carteira.model.enums.AssetType;
 
 import com.example.carteira.model.enums.Market;
@@ -79,7 +83,7 @@ public class WebScraperService implements MarketDataProvider {
                         .queryParam("q", searchTerm)
                         .build())
                 .retrieve()
-                .bodyToMono(YahooSearchResponse.class)
+                .bodyToMono(YahooSearchResponseDto.class)
                 .flatMap(response -> {
                     if (response.quotes() == null || response.quotes().isEmpty()) {
                         logger.warn("Nenhum resultado encontrado na API de busca do Yahoo para o termo: {}", searchTerm);
@@ -91,7 +95,7 @@ public class WebScraperService implements MarketDataProvider {
                     String foundTicker = response.quotes().stream()
                             .filter(q -> "INDEX".equalsIgnoreCase(q.quoteType()))
                             .findFirst()
-                            .map(YahooQuote::symbol)
+                            .map(YahooQuoteDto::symbol)
                             .orElse(response.quotes().get(0).symbol()); // Fallback para o primeiro resultado
 
                     logger.info("Busca via API encontrou o ticker: {} para o termo '{}'", foundTicker, searchTerm);
@@ -124,11 +128,11 @@ public class WebScraperService implements MarketDataProvider {
                                     .queryParam("interval", "1d") // com granularidade diária
                                     .build())
                             .retrieve()
-                            .bodyToMono(YahooChartResponse.class)
+                            .bodyToMono(YahooChartResponseDto.class)
                             .map(response -> {
                                 // Lógica para encontrar o preço mais próximo da data solicitada
                                 if (response != null && response.chart() != null && !response.chart().result().isEmpty()) {
-                                    ChartData data = response.chart().result().get(0);
+                                    ChartDataDto data = response.chart().result().get(0);
                                     List<Long> timestamps = data.timestamp();
                                     List<BigDecimal> prices = data.indicators().quote().get(0).close();
 
@@ -177,7 +181,7 @@ public class WebScraperService implements MarketDataProvider {
                         .queryParam("q", searchTerm)
                         .build())
                 .retrieve()
-                .bodyToMono(YahooSearchResponse.class)
+                .bodyToMono(YahooSearchResponseDto.class)
                 .flatMap(response -> {
                     if (response.quotes() == null || response.quotes().isEmpty()) {
                         logger.warn("Nenhum resultado encontrado na API de busca do Yahoo para o termo: {}", searchTerm);
@@ -187,7 +191,7 @@ public class WebScraperService implements MarketDataProvider {
                     String foundTicker = response.quotes().stream()
                             .filter(q -> "INDEX".equalsIgnoreCase(q.quoteType()))
                             .findFirst()
-                            .map(YahooQuote::symbol)
+                            .map(YahooQuoteDto::symbol)
                             .orElse(response.quotes().get(0).symbol());
 
                     logger.info("Busca via API encontrou o ticker canônico: {} para o termo '{}'", foundTicker, searchTerm);
@@ -269,24 +273,7 @@ public class WebScraperService implements MarketDataProvider {
                 });
     }
 
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    private record YahooSearchResponse(@JsonProperty("quotes") List<YahooQuote> quotes) {}
 
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    private record YahooQuote(String symbol, String shortname, String quoteType) {}
 
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    private record YahooChartResponse(ChartResult chart) {}
 
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    private record ChartResult(@JsonProperty("result") List<ChartData> result) {}
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    private record ChartData(List<Long> timestamp, ChartIndicators indicators) {}
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    private record ChartIndicators(@JsonProperty("quote") List<QuoteData> quote) {}
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    private record QuoteData(@JsonProperty("close") List<BigDecimal> close) {}
 }
