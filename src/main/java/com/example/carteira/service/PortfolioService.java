@@ -143,8 +143,15 @@ public class PortfolioService {
         BigDecimal totalCost = BigDecimal.ZERO;
         BigDecimal totalBuyQuantity = BigDecimal.ZERO;
         for (Transaction t : transactions) {
-            if (TransactionType.BUY.equals(t.getTransactionType())) { // <-- COMPARAÇÃO CORRIGIDA
-                totalCost = totalCost.add(t.getQuantity().multiply(t.getPricePerUnit()));
+            if (TransactionType.BUY.equals(t.getTransactionType())) {
+                // ***** CORREÇÃO PRINCIPAL AQUI *****
+                // O custo da transação agora é (quantidade * preço) + outros custos.
+                BigDecimal transactionCost = t.getQuantity().multiply(t.getPricePerUnit());
+                if (t.getOtherCosts() != null) {
+                    transactionCost = transactionCost.add(t.getOtherCosts());
+                }
+
+                totalCost = totalCost.add(transactionCost); // Usa o custo corrigido
                 totalQuantity = totalQuantity.add(t.getQuantity());
                 totalBuyQuantity = totalBuyQuantity.add(t.getQuantity());
             } else {

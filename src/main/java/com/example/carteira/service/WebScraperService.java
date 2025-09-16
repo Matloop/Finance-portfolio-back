@@ -274,6 +274,6 @@ public class WebScraperService implements MarketDataProvider {
     }
 
 
-
+    
 
 }
