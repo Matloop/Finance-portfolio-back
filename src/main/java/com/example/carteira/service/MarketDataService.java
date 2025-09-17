@@ -1,6 +1,7 @@
 package com.example.carteira.service;
 
 import com.example.carteira.model.Transaction;
+import com.example.carteira.model.dtos.AssetSearchResultDto;
 import com.example.carteira.model.dtos.AssetToFetch;
 import com.example.carteira.model.dtos.PriceData;
 import com.example.carteira.model.enums.AssetType;
@@ -78,6 +79,23 @@ public class MarketDataService {
                     // executar com dados potencialmente incorretos.
                 })
                 .subscribe();
+    }
+
+    public Flux<AssetSearchResultDto> searchAssets(String term) {
+        // Encontra todos os provedores que suportam o tipo de ativo buscado
+        // (pode ser mais complexo se você quiser buscar por tipo)
+        // Por agora, vamos buscar em todos.
+
+        List<Flux<AssetSearchResultDto>> searchFluxes = providers.stream()
+                .map(provider -> provider.search(term)
+                        .onErrorResume(e -> {
+                            logger.error("Erro na busca do provedor {}: {}", provider.getClass().getSimpleName(), e.getMessage());
+                            return Flux.empty(); // Se um provedor falhar, não quebra a busca inteira
+                        }))
+                .collect(Collectors.toList());
+
+        // Combina os resultados de todos os provedores em um único fluxo
+        return Flux.merge(searchFluxes);
     }
 
     /**

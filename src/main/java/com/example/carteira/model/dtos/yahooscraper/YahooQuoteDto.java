@@ -5,5 +5,5 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
 
 @JsonIgnoreProperties(ignoreUnknown = true)
-public record YahooQuoteDto(String symbol, String shortname, String quoteType) {}
+public record YahooQuoteDto(String symbol, String shortname, String quoteType, String exchange) {}
 

@@ -1,5 +1,6 @@
 package com.example.carteira.service;
 
+import com.example.carteira.model.dtos.AssetSearchResultDto;
 import com.example.carteira.model.dtos.AssetToFetch;
 import com.example.carteira.model.dtos.PriceData;
 import com.example.carteira.model.enums.AssetType;
@@ -16,4 +17,5 @@ public interface MarketDataProvider {
     boolean supports(AssetType assetType);
     Mono<PriceData> fetchHistoricalPrice(AssetToFetch assetToFetch, LocalDate date);
     Mono<Void> initialize();
+    Flux<AssetSearchResultDto> search(String term);
 }

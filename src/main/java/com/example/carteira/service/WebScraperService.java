@@ -1,5 +1,6 @@
 package com.example.carteira.service;
 
+import com.example.carteira.model.dtos.AssetSearchResultDto;
 import com.example.carteira.model.dtos.AssetToFetch;
 import com.example.carteira.model.dtos.PriceData;
 import com.example.carteira.model.dtos.yahooscraper.ChartDataDto;
@@ -10,12 +11,9 @@ import com.example.carteira.model.enums.AssetType;
 
 import com.example.carteira.model.enums.Market;
 import com.example.carteira.service.util.ExchangeRateService;
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
-import com.fasterxml.jackson.annotation.JsonProperty;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
-import org.jsoup.parser.Parser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Primary;
@@ -26,16 +24,14 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 
-import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Objects;
+import java.util.stream.Collectors;
 
 @Service
 @Primary
@@ -225,6 +221,65 @@ public class WebScraperService implements MarketDataProvider {
                     }
                 })
                 .then();
+    }
+
+    @Override
+    public Flux<AssetSearchResultDto> search(String term) {
+        String cleanedTerm = term.replace("&", ""); // Limpeza básica para evitar problemas de URL
+
+        return webClient.get()
+                .uri(uriBuilder -> uriBuilder.path("/v1/finance/search").queryParam("q", cleanedTerm).build())
+                .retrieve()
+                .bodyToMono(YahooSearchResponseDto.class)
+                .flatMapMany(response -> {
+                    if (response == null || response.quotes() == null || response.quotes().isEmpty()) {
+                        return Flux.empty();
+                    }
+
+                    List<AssetSearchResultDto> results = response.quotes().stream()
+                            .map(this::mapYahooQuoteToSearchResult) // Mapeia cada resultado para nosso DTO
+                            .filter(Objects::nonNull) // Filtra qualquer resultado que não conseguimos mapear
+                            .limit(10) // Limita o número de resultados
+                            .collect(Collectors.toList());
+
+                    return Flux.fromIterable(results);
+                })
+                .onErrorResume(e -> {
+                    logger.error("Erro na API de busca do Yahoo para o termo '{}': {}", term, e.getMessage());
+                    return Flux.empty();
+                });
+    }
+
+    private AssetSearchResultDto mapYahooQuoteToSearchResult(YahooQuoteDto quote) {
+        AssetType assetType;
+        Market market = null;
+
+        // Acessar os campos do record com a sintaxe correta (quote.quoteType(), quote.exchange())
+        switch (quote.quoteType().toUpperCase()) {
+            case "EQUITY":
+                assetType = AssetType.STOCK;
+                // CORREÇÃO: Usa List.of(...) para criar uma coleção para a verificação.
+                if ("SAO".equals(quote.exchange())) market = Market.B3;
+                else if (List.of("NMS", "NYQ").contains(quote.exchange())) market = Market.US;
+                break;
+
+            case "ETF":
+                assetType = AssetType.ETF;
+                // CORREÇÃO: Usa List.of(...) para criar uma coleção para a verificação.
+                if ("SAO".equals(quote.exchange())) market = Market.B3;
+                else if (List.of("NMS", "NYQ", "PCX").contains(quote.exchange())) market = Market.US;
+                break;
+
+            case "CRYPTOCURRENCY":
+                assetType = AssetType.CRYPTO;
+                market = null;
+                break;
+
+            default:
+                return null;
+        }
+
+        return new AssetSearchResultDto(quote.symbol(), quote.shortname(), assetType, market);
     }
 
     private Mono<PriceData> fetchSingleStockPrice(AssetToFetch asset) {

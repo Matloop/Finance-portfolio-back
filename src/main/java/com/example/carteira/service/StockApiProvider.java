@@ -67,6 +67,12 @@ public class StockApiProvider implements MarketDataProvider {
                 .then();
     }
 
+    @Override
+    public Flux<AssetSearchResultDto> search(String term) {
+        logger.debug("A busca de ativos não está implementada para o StockApiProvider (Alpha Vantage).");
+        return Flux.empty();
+    }
+
     // BUG 3 CORRIGIDO: Implementação correta e reativa do fetchPrices.
     @Override
     public Flux<PriceData> fetchPrices(List<AssetToFetch> assetsToFetch) {
