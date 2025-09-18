@@ -9,10 +9,13 @@ import com.example.carteira.repository.TransactionRepository;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -108,6 +111,17 @@ public class MarketDataService {
         return priceCache.getOrDefault(ticker.toUpperCase(), BigDecimal.ZERO);
     }
 
+    public Mono<PriceData> getPriceWithFallback(AssetToFetch asset) {
+        List<MarketDataProvider> availableProviders = findProvidersFor(asset.assetType());
+        if (availableProviders.isEmpty()) return Mono.empty();
+
+        Flux<PriceData> priceFlux = Flux.empty();
+        for (MarketDataProvider provider : availableProviders) {
+            Flux<PriceData> providerFlux = Flux.defer(() -> provider.fetchPrices(List.of(asset)));
+            priceFlux = priceFlux.switchIfEmpty(providerFlux);
+        }
+        return priceFlux.next();
+    }
     /**
      * Retorna uma visão não modificável de todo o cache de preços.
      */
@@ -143,18 +157,34 @@ public class MarketDataService {
         logger.info("Cache atualizado: {} = {}", priceData.ticker().toUpperCase(), priceData.price());
     }
 
-    /**
-     * Encontra o primeiro provedor na lista que suporta o tipo de ativo fornecido.
-     * @param assetType O tipo de ativo (STOCK, CRYPTO, etc.).
-     * @return um Optional contendo o provedor, ou um Optional vazio se nenhum for encontrado.
-     */
+
     List<MarketDataProvider> findProvidersFor(AssetType assetType) {
         return providers.stream()
                 .filter(p -> p.supports(assetType))
-                // Ordena a lista para que o provedor @Primary venha primeiro.
-                .sorted(Comparator.comparing(p -> !p.getClass().isAnnotationPresent(org.springframework.context.annotation.Primary.class)))
+                .sorted(Comparator.comparing(p -> !p.getClass().isAnnotationPresent(Primary.class)))
                 .collect(Collectors.toList());
     }
+
+
+    public Mono<PriceData> getHistoricalPriceWithFallback(AssetToFetch asset, LocalDate date) {
+        List<MarketDataProvider> availableProviders = findProvidersFor(asset.assetType());
+        if (availableProviders.isEmpty()) {
+            logger.warn("[Histórico] Nenhum provedor encontrado para o tipo de ativo: {}", asset.assetType());
+            return Mono.empty();
+        }
+
+        Flux<PriceData> priceFlux = Flux.empty();
+        for (MarketDataProvider provider : availableProviders) {
+            Flux<PriceData> providerFlux = Flux.defer(() -> {
+                logger.info("[Histórico] Tentando provedor '{}' para {} em {}",
+                        provider.getClass().getSimpleName(), asset.ticker(), date);
+                return provider.fetchHistoricalPrice(asset, date).flux();
+            });
+            priceFlux = priceFlux.switchIfEmpty(providerFlux);
+        }
+        return priceFlux.next();
+    }
+
 
     private void updatePricesForTransactions(List<Transaction> transactions, String logContext) {
         if (transactions == null || transactions.isEmpty()) {
@@ -176,7 +206,7 @@ public class MarketDataService {
             }
 
             Set<AssetToFetch> uniqueAssets = transactionList.stream()
-                    .map(t -> new AssetToFetch(t.getTicker().toUpperCase(), t.getMarket()))
+                    .map(t -> new AssetToFetch(t.getTicker().toUpperCase(), t.getMarket(), t.getAssetType()))
                     .collect(Collectors.toSet());
 
             // 2. Construir a cadeia de fallback reativa

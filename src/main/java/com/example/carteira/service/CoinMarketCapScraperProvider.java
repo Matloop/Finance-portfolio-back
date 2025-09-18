@@ -1,10 +1,10 @@
-// Crie este novo arquivo em: src/main/java/com/example/carteira/service/
 package com.example.carteira.service;
 
 import com.example.carteira.model.dtos.AssetSearchResultDto;
 import com.example.carteira.model.dtos.AssetToFetch;
 import com.example.carteira.model.dtos.PriceData;
 import com.example.carteira.model.enums.AssetType;
+import com.example.carteira.model.enums.Market;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import org.jsoup.Jsoup;
@@ -13,7 +13,6 @@ import org.jsoup.nodes.Element;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.ExchangeStrategies;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -23,7 +22,6 @@ import reactor.core.scheduler.Schedulers;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
-import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -31,7 +29,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 @Service
-@Primary // Defina este como o provedor primário para CRIPTO
+// @Primary // Mantenha comentado se o WebScraperService for o seu fallback
 public class CoinMarketCapScraperProvider implements MarketDataProvider {
 
     private static final Logger logger = LoggerFactory.getLogger(CoinMarketCapScraperProvider.class);
@@ -39,25 +37,22 @@ public class CoinMarketCapScraperProvider implements MarketDataProvider {
     private final String apiKey;
     private final Map<String, CmcMapData> tickerToCmcDataCache = new ConcurrentHashMap<>();
 
-    // --- DTOs para a API Profissional do CoinMarketCap ---
+    // DTOs para a API
     @JsonIgnoreProperties(ignoreUnknown = true)
     private record CmcIdMapResponse(@JsonProperty("data") List<CmcMapData> data) {}
     @JsonIgnoreProperties(ignoreUnknown = true)
     private record CmcMapData(int id, String name, String symbol, String slug) {}
-    // DTOs históricos não são mais necessários com a API gratuita
 
-    // Construtor atualizado para injetar a chave da API
     public CoinMarketCapScraperProvider(WebClient.Builder webClientBuilder, @Value("${coinmarketcap.apikey}") String apiKey) {
         this.apiKey = apiKey;
-        final int maxMemorySize = 5 * 1024 * 1024; // 500 KB (ajuste se necessário)
+        final int maxMemorySize = 5 * 1024 * 1024;
         ExchangeStrategies strategies = ExchangeStrategies.builder()
                 .codecs(configurer -> configurer.defaultCodecs().maxInMemorySize(maxMemorySize))
                 .build();
-
         this.cmcApiClient = webClientBuilder
                 .baseUrl("https://pro-api.coinmarketcap.com")
                 .defaultHeader("X-CMC_PRO_API_KEY", this.apiKey)
-                .exchangeStrategies(strategies) // <-- APLICA AS NOVAS ESTRATÉGIAS
+                .exchangeStrategies(strategies)
                 .build();
     }
 
@@ -68,21 +63,19 @@ public class CoinMarketCapScraperProvider implements MarketDataProvider {
 
     @Override
     public Mono<Void> initialize() {
-        // CORREÇÃO: Usa o endpoint correto da API Profissional
         return cmcApiClient.get()
                 .uri("/v1/cryptocurrency/map")
                 .retrieve()
                 .bodyToMono(CmcIdMapResponse.class)
                 .doOnSuccess(response -> {
                     if (response != null && response.data() != null) {
-                        // putIfAbsent para não sobrescrever com moedas menos conhecidas com o mesmo ticker
                         response.data().forEach(coin -> tickerToCmcDataCache.putIfAbsent(coin.symbol().toUpperCase(), coin));
                         logger.info("Cache do CoinMarketCap populado com {} ativos.", tickerToCmcDataCache.size());
                     }
                 })
                 .onErrorResume(e -> {
                     logger.error("Falha CRÍTICA ao popular cache do CoinMarketCap. Verifique sua chave de API e plano. Erro: {}", e.getMessage());
-                    return Mono.empty(); // Continua para não quebrar a inicialização inteira
+                    return Mono.empty();
                 })
                 .then();
     }
@@ -90,31 +83,72 @@ public class CoinMarketCapScraperProvider implements MarketDataProvider {
     @Override
     public Flux<AssetSearchResultDto> search(String term) {
         String upperCaseTerm = term.toUpperCase();
-
-        // A busca é feita em memória, o que é ultra-rápido.
         List<AssetSearchResultDto> results = tickerToCmcDataCache.values().stream()
                 .filter(coin ->
                         coin.symbol().toUpperCase().startsWith(upperCaseTerm) ||
                                 coin.name().toUpperCase().contains(upperCaseTerm)
                 )
-                .limit(10) // Limita a 10 resultados para não sobrecarregar o frontend
+                .limit(10)
                 .map(coin -> new AssetSearchResultDto(
                         coin.symbol(),
                         coin.name(),
                         AssetType.CRYPTO,
-                        null // Criptomoedas não têm um 'Market' como B3 ou US
+                        null
                 ))
                 .collect(Collectors.toList());
-
         return Flux.fromIterable(results);
     }
+
     @Override
     public Flux<PriceData> fetchPrices(List<AssetToFetch> assetsToFetch) {
-        // Web scraping para o preço atual
-        return Flux.fromIterable(assetsToFetch)
-                .flatMap(this::fetchSingleCryptoPrice);
+        // Pega os símbolos de todos os ativos que precisamos buscar
+        String symbols = assetsToFetch.stream()
+                .map(AssetToFetch::ticker)
+                .collect(Collectors.joining(","));
+
+        if (symbols.isEmpty()) {
+            return Flux.empty();
+        }
+
+        logger.info("Buscando preços atuais no CoinMarketCap para: {}", symbols);
+
+        // Chama a API de cotação para todos os tickers de uma vez
+        return cmcApiClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/v2/cryptocurrency/quotes/latest")
+                        .queryParam("symbol", symbols)
+                        .queryParam("convert", "BRL") // Pede o preço já em Reais
+                        .build())
+                .retrieve()
+                .bodyToMono(CmcQuoteResponse.class)
+                .flatMapMany(response -> {
+                    if (response == null || response.data() == null) {
+                        return Flux.empty();
+                    }
+
+                    // Mapeia a resposta para nosso DTO PriceData
+                    List<PriceData> prices = response.data().entrySet().stream()
+                            .map(entry -> {
+                                String ticker = entry.getKey();
+                                CmcQuotePrice quote = entry.getValue().quote().get("BRL");
+                                if (quote != null && quote.price() != null) {
+                                    return new PriceData(ticker, quote.price());
+                                }
+                                return null;
+                            })
+                            .filter(Objects::nonNull)
+                            .collect(Collectors.toList());
+
+                    return Flux.fromIterable(prices);
+                })
+                .onErrorResume(e -> {
+                    logger.error("Erro ao buscar preços atuais no CoinMarketCap: {}", e.getMessage());
+                    return Flux.empty();
+                });
     }
 
+
+    // ***** MÉTODO DE SCRAPING CORRIGIDO *****
     private Mono<PriceData> fetchSingleCryptoPrice(AssetToFetch asset) {
         CmcMapData cmcData = tickerToCmcDataCache.get(asset.ticker().toUpperCase());
         if (cmcData == null) {
@@ -125,18 +159,22 @@ public class CoinMarketCapScraperProvider implements MarketDataProvider {
         String url = "https://coinmarketcap.com/currencies/" + cmcData.slug() + "/";
 
         return Mono.fromCallable(() -> {
-                    logger.debug("Scraping URL: {}", url);
+                    logger.debug("Scraping para preço atual na URL: {}", url);
                     Document doc = Jsoup.connect(url).get();
-                    // CORREÇÃO: Seletor mais específico e robusto
-                    Element priceElement = doc.selectFirst(".sc-d1307656-0.jsJtkO > span");
+
+                    // CORREÇÃO: Novo seletor, mais robusto
+                    Element priceElement = doc.selectFirst("div[data-testid='price-section'] span");
 
                     if (priceElement != null) {
-                        String priceText = priceElement.text()
-                                .replace("$", "")
-                                .replace(",", "");
+                        String priceText = priceElement.text(); // Ex: "$63,018.66"
+
+                        // Lógica de parsing robusta para remover símbolos e separadores
+                        priceText = priceText.replaceAll("[^\\d.]", ""); // Remove tudo que não for dígito ou ponto
+
                         return new PriceData(asset.ticker(), new BigDecimal(priceText));
                     }
-                    logger.warn("Seletor de preço não encontrado em {} para o ticker {}", url, asset.ticker());
+
+                    logger.warn("Seletor de preço não foi encontrado em {} para o ticker {}", url, asset.ticker());
                     return null;
                 })
                 .subscribeOn(Schedulers.boundedElastic())
@@ -149,9 +187,16 @@ public class CoinMarketCapScraperProvider implements MarketDataProvider {
 
     @Override
     public Mono<PriceData> fetchHistoricalPrice(AssetToFetch asset, LocalDate date) {
-        // CORREÇÃO: Implementação segura que informa a limitação do plano.
-        logger.warn("A busca de preços históricos de cripto não é suportada pelo plano gratuito da API do CoinMarketCap. Para o ativo: {}", asset.ticker());
-        // Retorna um Mono vazio para não quebrar a lógica de evolução do patrimônio.
+        logger.warn("A busca de preços históricos de cripto não é suportada por este provedor. Ativo: {}", asset.ticker());
         return Mono.empty();
     }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private record CmcQuoteResponse(@JsonProperty("data") Map<String, CmcQuoteData> data) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private record CmcQuoteData(@JsonProperty("quote") Map<String, CmcQuotePrice> quote) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private record CmcQuotePrice(BigDecimal price) {}
 }

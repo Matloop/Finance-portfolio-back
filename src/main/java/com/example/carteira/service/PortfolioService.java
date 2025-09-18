@@ -10,6 +10,8 @@ import com.example.carteira.service.util.ExchangeRateService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -161,20 +163,19 @@ public class PortfolioService {
         if (totalQuantity.compareTo(BigDecimal.ZERO) <= 0) return null;
         BigDecimal averagePrice = totalCost.divide(totalBuyQuantity, 4, RoundingMode.HALF_UP);
 
-        MarketDataProvider provider = marketDataService.findProvidersFor(key.assetType()).stream().findFirst().orElse(null);
-        if (provider == null) return null;
-
         boolean isToday = calculationDate.isEqual(LocalDate.now());
+
+        // CORREÇÃO: Delega a busca de preço com fallback para o MarketDataService.
         PriceData priceData = isToday
-                ? provider.fetchPrices(List.of(new AssetToFetch(key.ticker(), key.market()))).blockFirst()
-                : provider.fetchHistoricalPrice(new AssetToFetch(key.ticker(), key.market()), calculationDate).block();
+                ? marketDataService.getPriceWithFallback(new AssetToFetch(key.ticker(), key.market(), key.assetType())).block()
+                : marketDataService.getHistoricalPriceWithFallback(new AssetToFetch(key.ticker(), key.market(), key.assetType()), calculationDate).block();
 
         if (priceData == null) {
             logger.warn("Não foi possível encontrar o preço para {} na data {}", key.ticker(), calculationDate);
             return null;
         }
-        BigDecimal price = priceData.price();
 
+        BigDecimal price = priceData.price();
         if (Market.US.equals(key.market())) { // <-- COMPARAÇÃO CORRIGIDA
             BigDecimal usdToBrlRate = isToday
                     ? exchangeRateService.fetchUsdToBrlRate().block()
@@ -208,6 +209,33 @@ public class PortfolioService {
         position.setProfitOrLoss(profitOrLoss);
         position.setProfitability(profitability);
         return position;
+    }
+
+    public Mono<PriceData> getHistoricalPriceWithFallback(AssetToFetch asset, LocalDate date) {
+        List<MarketDataProvider> availableProviders = marketDataService.findProvidersFor(asset.assetType());
+
+        if (availableProviders.isEmpty()) {
+            logger.warn("[Histórico] Nenhum provedor encontrado para o tipo de ativo: {}", asset.assetType());
+            return Mono.empty();
+        }
+
+        Flux<PriceData> priceFlux = Flux.empty();
+
+        for (MarketDataProvider provider : availableProviders) {
+            // Flux.defer garante que a chamada ao provedor só aconteça se a anterior falhar.
+            Flux<PriceData> providerFlux = Flux.defer(() -> {
+                logger.info("[Histórico] Tentando provedor '{}' para {} em {}",
+                        provider.getClass().getSimpleName(), asset.ticker(), date);
+                // .flux() converte o Mono<PriceData> retornado pelo provedor em um Flux<PriceData>
+                return provider.fetchHistoricalPrice(asset, date).flux();
+            });
+
+            // Constrói a cadeia de fallback
+            priceFlux = priceFlux.switchIfEmpty(providerFlux);
+        }
+
+        // Retorna o primeiro preço encontrado por qualquer um dos provedores.
+        return priceFlux.next();
     }
 
 
