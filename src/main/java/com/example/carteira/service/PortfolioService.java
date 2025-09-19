@@ -141,19 +141,17 @@ public class PortfolioService {
      * Calcula a posição de um único ativo para uma data específica (atual ou histórica).
      */
     private AssetPositionDto calculateSinglePosition(AssetKey key, List<Transaction> transactions, LocalDate calculationDate) {
+        // 1. Calcula quantidade e preço médio na moeda original da transação.
         BigDecimal totalQuantity = BigDecimal.ZERO;
         BigDecimal totalCost = BigDecimal.ZERO;
         BigDecimal totalBuyQuantity = BigDecimal.ZERO;
         for (Transaction t : transactions) {
             if (TransactionType.BUY.equals(t.getTransactionType())) {
-                // ***** CORREÇÃO PRINCIPAL AQUI *****
-                // O custo da transação agora é (quantidade * preço) + outros custos.
                 BigDecimal transactionCost = t.getQuantity().multiply(t.getPricePerUnit());
                 if (t.getOtherCosts() != null) {
                     transactionCost = transactionCost.add(t.getOtherCosts());
                 }
-
-                totalCost = totalCost.add(transactionCost); // Usa o custo corrigido
+                totalCost = totalCost.add(transactionCost);
                 totalQuantity = totalQuantity.add(t.getQuantity());
                 totalBuyQuantity = totalBuyQuantity.add(t.getQuantity());
             } else {
@@ -163,33 +161,38 @@ public class PortfolioService {
         if (totalQuantity.compareTo(BigDecimal.ZERO) <= 0) return null;
         BigDecimal averagePrice = totalCost.divide(totalBuyQuantity, 4, RoundingMode.HALF_UP);
 
-        boolean isToday = calculationDate.isEqual(LocalDate.now());
+        // 2. Encontra provedor e busca o preço (ainda na moeda original).
+        MarketDataProvider provider = marketDataService.findProvidersFor(key.assetType()).stream().findFirst().orElse(null);
+        if (provider == null) return null;
 
-        // CORREÇÃO: Delega a busca de preço com fallback para o MarketDataService.
+        boolean isToday = calculationDate.isEqual(LocalDate.now());
         PriceData priceData = isToday
-                ? marketDataService.getPriceWithFallback(new AssetToFetch(key.ticker(), key.market(), key.assetType())).block()
-                : marketDataService.getHistoricalPriceWithFallback(new AssetToFetch(key.ticker(), key.market(), key.assetType()), calculationDate).block();
+                ? provider.fetchPrices(List.of(new AssetToFetch(key.ticker(), key.market(), key.assetType()))).blockFirst()
+                : provider.fetchHistoricalPrice(new AssetToFetch(key.ticker(), key.market(), key.assetType()), calculationDate).block();
 
         if (priceData == null) {
             logger.warn("Não foi possível encontrar o preço para {} na data {}", key.ticker(), calculationDate);
             return null;
         }
-
         BigDecimal price = priceData.price();
-        if (Market.US.equals(key.market())) { // <-- COMPARAÇÃO CORRIGIDA
+
+        // 3. ***** CORREÇÃO APLICADA AQUI *****
+        // Converte o preço E o custo para BRL se o ativo for cotado em dólar.
+        if (Market.US.equals(key.market()) || AssetType.CRYPTO.equals(key.assetType())) {
             BigDecimal usdToBrlRate = isToday
                     ? exchangeRateService.fetchUsdToBrlRate().block()
                     : exchangeRateService.fetchHistoricalUsdToBrlRate(calculationDate).block();
 
             if (usdToBrlRate != null) {
                 price = price.multiply(usdToBrlRate);
-                averagePrice = averagePrice.multiply(usdToBrlRate);
+                averagePrice = averagePrice.multiply(usdToBrlRate); // <-- ESTA LINHA CORRIGE O BUG
             } else {
                 logger.warn("Taxa de câmbio não encontrada para {}. Valor de {} será ignorado.", calculationDate, key.ticker());
                 return null;
             }
         }
 
+        // 4. Agora TODOS os cálculos são feitos em BRL.
         BigDecimal currentValue = price.multiply(totalQuantity);
         BigDecimal currentPositionCost = totalQuantity.multiply(averagePrice);
         BigDecimal profitOrLoss = currentValue.subtract(currentPositionCost);
@@ -197,6 +200,7 @@ public class PortfolioService {
                 ? profitOrLoss.divide(currentPositionCost, 4, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100))
                 : BigDecimal.ZERO;
 
+        // 5. Monta e retorna o DTO da posição.
         AssetPositionDto position = new AssetPositionDto();
         position.setTicker(key.ticker());
         position.setAssetType(key.assetType());

@@ -37,12 +37,6 @@ public class CoinMarketCapScraperProvider implements MarketDataProvider {
     private final String apiKey;
     private final Map<String, CmcMapData> tickerToCmcDataCache = new ConcurrentHashMap<>();
 
-    // DTOs para a API
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    private record CmcIdMapResponse(@JsonProperty("data") List<CmcMapData> data) {}
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    private record CmcMapData(int id, String name, String symbol, String slug) {}
-
     public CoinMarketCapScraperProvider(WebClient.Builder webClientBuilder, @Value("${coinmarketcap.apikey}") String apiKey) {
         this.apiKey = apiKey;
         final int maxMemorySize = 5 * 1024 * 1024;
@@ -101,18 +95,13 @@ public class CoinMarketCapScraperProvider implements MarketDataProvider {
 
     @Override
     public Flux<PriceData> fetchPrices(List<AssetToFetch> assetsToFetch) {
-        // Pega os símbolos de todos os ativos que precisamos buscar
         String symbols = assetsToFetch.stream()
                 .map(AssetToFetch::ticker)
                 .collect(Collectors.joining(","));
+        if (symbols.isEmpty()) return Flux.empty();
 
-        if (symbols.isEmpty()) {
-            return Flux.empty();
-        }
+        logger.info("Buscando preços atuais na API do CoinMarketCap para: {}", symbols);
 
-        logger.info("Buscando preços atuais no CoinMarketCap para: {}", symbols);
-
-        // Chama a API de cotação para todos os tickers de uma vez
         return cmcApiClient.get()
                 .uri(uriBuilder -> uriBuilder
                         .path("/v2/cryptocurrency/quotes/latest")
@@ -122,17 +111,14 @@ public class CoinMarketCapScraperProvider implements MarketDataProvider {
                 .retrieve()
                 .bodyToMono(CmcQuoteResponse.class)
                 .flatMapMany(response -> {
-                    if (response == null || response.data() == null) {
-                        return Flux.empty();
-                    }
+                    if (response == null || response.data() == null) return Flux.empty();
 
-                    // Mapeia a resposta para nosso DTO PriceData
-                    List<PriceData> prices = response.data().entrySet().stream()
-                            .map(entry -> {
-                                String ticker = entry.getKey();
-                                CmcQuotePrice quote = entry.getValue().quote().get("BRL");
+                    List<PriceData> prices = response.data().values().stream()
+                            .flatMap(List::stream)
+                            .map(quoteData -> {
+                                CmcQuotePrice quote = quoteData.quote().get("BRL");
                                 if (quote != null && quote.price() != null) {
-                                    return new PriceData(ticker, quote.price());
+                                    return new PriceData(quoteData.symbol(), quote.price());
                                 }
                                 return null;
                             })
@@ -143,7 +129,7 @@ public class CoinMarketCapScraperProvider implements MarketDataProvider {
                 })
                 .onErrorResume(e -> {
                     logger.error("Erro ao buscar preços atuais no CoinMarketCap: {}", e.getMessage());
-                    return Flux.empty();
+                    return Flux.empty(); // Retorna vazio para acionar o fallback, se houver
                 });
     }
 
@@ -191,12 +177,14 @@ public class CoinMarketCapScraperProvider implements MarketDataProvider {
         return Mono.empty();
     }
 
+    @JsonIgnoreProperties(ignoreUnknown = true) private record CmcIdMapResponse(@JsonProperty("data") List<CmcMapData> data) {}
+    @JsonIgnoreProperties(ignoreUnknown = true) private record CmcMapData( String name, String symbol, String slug,int id) {}
+    @JsonIgnoreProperties(ignoreUnknown = true) private record CmcQuoteResponse(@JsonProperty("data") Map<String, List<CmcQuoteData>> data) {}
     @JsonIgnoreProperties(ignoreUnknown = true)
-    private record CmcQuoteResponse(@JsonProperty("data") Map<String, CmcQuoteData> data) {}
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    private record CmcQuoteData(@JsonProperty("quote") Map<String, CmcQuotePrice> quote) {}
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    private record CmcQuotePrice(BigDecimal price) {}
+    private record CmcQuoteData(
+            int id, // <-- Adiciona o ID para referência
+            String symbol, // <-- Adiciona o símbolo para referência
+            @JsonProperty("quote") Map<String, CmcQuotePrice> quote
+    ) {}
+    @JsonIgnoreProperties(ignoreUnknown = true) private record CmcQuotePrice(BigDecimal price) {}
 }

@@ -55,28 +55,26 @@
             Element priceElement = doc.selectFirst("[data-testid=\"quote-hdr\"] [data-testid=\"qsp-price\"]");
 
             if (priceElement != null) {
-                String priceText = priceElement.text(); // Ex: "116,487.28" ou "116.487,28"
+                String priceText = priceElement.text(); // Ex: "116,409.86" (formato americano)
 
-                // ***** LÓGICA DE PARSING ROBUSTA APLICADA AQUI *****
+                // ***** LÓGICA DE PARSING CORRIGIDA E SIMPLIFICADA *****
 
-                // 1. Remove os pontos, que são usados como separador de milhar no formato brasileiro/europeu.
-                // "116.487,28" -> "116487,28"
-                priceText = priceText.replace(".", "");
+                // 1. Remove todas as vírgulas, que são usadas como separador de milhar.
+                // "116,409.86" -> "116409.86"
+                priceText = priceText.replace(",", "");
 
-                // 2. Substitui a vírgula (que agora é garantidamente o separador decimal) por um ponto.
-                // "116487,28" -> "116487.28"
-                priceText = priceText.replace(",", ".");
-
-                // Se o formato original fosse americano ("116,487.28"), o passo 1 não faria nada.
-                // O passo 2 transformaria em "116487.28", o que também está correto.
+                // 2. A string resultante agora está no formato numérico padrão que o Java entende.
+                // Se o número original fosse "35.50", ele permaneceria "35.50".
+                // Se fosse "35,50" (formato brasileiro), o passo anterior não faria nada
+                // e esta lógica precisaria ser expandida, mas para o Yahoo (que usa formato US) isso é suficiente.
 
                 try {
                     BigDecimal price = new BigDecimal(priceText);
                     logger.info("Preço extraído com sucesso para {}: {}", originalTicker, price);
                     return new PriceData(originalTicker, price);
                 } catch (NumberFormatException e) {
-                    logger.error("Falha ao converter o texto '{}' para BigDecimal para o ticker {}", priceText, originalTicker);
-                    throw e; // Lança a exceção para que o fluxo reativo a capture
+                    logger.error("Falha ao converter o texto limpo '{}' para BigDecimal para o ticker {}", priceText, originalTicker);
+                    throw e; // Lança a exceção para ser capturada pelo fluxo reativo
                 }
 
             } else {
