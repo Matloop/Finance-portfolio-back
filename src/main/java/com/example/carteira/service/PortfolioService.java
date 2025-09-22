@@ -178,6 +178,7 @@ public class PortfolioService {
 
         // 3. ***** CORREÇÃO APLICADA AQUI *****
         // Converte o preço E o custo para BRL se o ativo for cotado em dólar.
+        logger.info("Antes da conversão {}: '{}'", price);
         if (Market.US.equals(key.market()) || AssetType.CRYPTO.equals(key.assetType())) {
             BigDecimal usdToBrlRate = isToday
                     ? exchangeRateService.fetchUsdToBrlRate().block()
@@ -190,6 +191,8 @@ public class PortfolioService {
                 logger.warn("Taxa de câmbio não encontrada para {}. Valor de {} será ignorado.", calculationDate, key.ticker());
                 return null;
             }
+
+            logger.info("Depois da conversão {}: '{}'", price);
         }
 
         // 4. Agora TODOS os cálculos são feitos em BRL.

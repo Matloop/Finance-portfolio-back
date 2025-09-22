@@ -76,21 +76,8 @@ public class CoinMarketCapScraperProvider implements MarketDataProvider {
 
     @Override
     public Flux<AssetSearchResultDto> search(String term) {
-        String upperCaseTerm = term.toUpperCase();
-        List<AssetSearchResultDto> results = tickerToCmcDataCache.values().stream()
-                .filter(coin ->
-                        coin.symbol().toUpperCase().startsWith(upperCaseTerm) ||
-                                coin.name().toUpperCase().contains(upperCaseTerm)
-                )
-                .limit(10)
-                .map(coin -> new AssetSearchResultDto(
-                        coin.symbol(),
-                        coin.name(),
-                        AssetType.CRYPTO,
-                        null
-                ))
-                .collect(Collectors.toList());
-        return Flux.fromIterable(results);
+        // Retorna um fluxo vazio para efetivamente desativar a busca neste provedor.
+        return Flux.empty();
     }
 
     @Override
