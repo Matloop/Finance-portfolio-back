@@ -1,26 +1,23 @@
 # --- Estágio 1: Build da Aplicação ---
-# CORREÇÃO: Usamos a imagem espelhada do Amazon ECR Public para evitar limites do Docker Hub.
+# Esta imagem do Maven baseada em Temurin está correta e funcionando.
 FROM public.ecr.aws/docker/library/maven:3.9-eclipse-temurin-17 AS build
 
 # Define o diretório de trabalho dentro do contêiner.
 WORKDIR /app
 
-# Copia os arquivos de definição do projeto (pom.xml) primeiro.
+# Otimização de cache do Docker
 COPY pom.xml .
-
-# Baixa todas as dependências do projeto.
 RUN mvn dependency:go-offline
 
-# Copia o código-fonte da sua aplicação para dentro do contêiner.
+# Copia o código-fonte e executa o build.
 COPY src ./src
-
-# Executa o build do Maven, que compila o código e empacota em um arquivo .jar.
 RUN mvn clean package -DskipTests
 
 
 # --- Estágio 2: Criação da Imagem de Execução (Runtime) ---
-# CORREÇÃO: Também usamos a imagem JRE espelhada do Amazon ECR Public.
-FROM public.ecr.aws/eclipse-temurin/temurin:17-jre-jammy
+# CORREÇÃO: Usamos a imagem oficial e leve do Amazon Corretto JRE.
+# Esta imagem é altamente otimizada e garantida de ser encontrada no ECR Public.
+FROM public.ecr.aws/amazoncorretto/amazoncorretto:17-jre-al2
 
 # Define o diretório de trabalho.
 WORKDIR /app
