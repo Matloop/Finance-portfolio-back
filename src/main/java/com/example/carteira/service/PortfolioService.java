@@ -98,14 +98,14 @@ public class PortfolioService {
         List<Transaction> transactionsUpToDate = allTransactions.stream()
                 .filter(t -> !t.getTransactionDate().isAfter(date))
                 .collect(Collectors.toList());
-
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("MMM/yy", Locale.ENGLISH);
         List<AssetPositionDto> positions = getConsolidatedPortfolio(transactionsUpToDate, date);
 
         BigDecimal patrimonio = positions.stream().filter(Objects::nonNull).map(AssetPositionDto::getCurrentValue).filter(Objects::nonNull).reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal valorAplicado = positions.stream().filter(Objects::nonNull).map(AssetPositionDto::getTotalInvested).filter(Objects::nonNull).reduce(BigDecimal.ZERO, BigDecimal::add);
 
         return new PortfolioEvolutionPointDto(
-                date.format(DateTimeFormatter.ofPattern("MM/yy")),
+                date.format(formatter),
                 patrimonio.setScale(2, RoundingMode.HALF_UP),
                 valorAplicado.setScale(2, RoundingMode.HALF_UP)
         );
