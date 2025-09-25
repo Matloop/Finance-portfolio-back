@@ -15,9 +15,9 @@ RUN mvn clean package -DskipTests
 
 
 # --- Estágio 2: Criação da Imagem de Execução (Runtime) ---
-# CORREÇÃO: Usamos a imagem oficial e leve do Amazon Corretto JRE.
-# Esta imagem é altamente otimizada e garantida de ser encontrada no ECR Public.
-FROM public.ecr.aws/amazoncorretto/amazoncorretto:17-jre-al2
+# CORREÇÃO: Usamos a imagem oficial padrão do Amazon Corretto para Java 17.
+# Ela é baseada no Amazon Linux, que é otimizado para a AWS (e funciona perfeitamente no Render).
+FROM public.ecr.aws/amazoncorretto/amazoncorretto:17
 
 # Define o diretório de trabalho.
 WORKDIR /app
