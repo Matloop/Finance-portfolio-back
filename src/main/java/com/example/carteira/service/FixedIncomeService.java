@@ -149,12 +149,114 @@ public class FixedIncomeService {
     }
 
     public BigDecimal getAllValue() {
-        BigDecimal total = BigDecimal.ZERO;
-         fixedIncomeRepository.findAll().stream()
+        return fixedIncomeRepository.findAll().stream()
                 .map(this::calculatePosition)
                 .map(AssetPositionDto::getCurrentValue)
-                 .reduce(total, BigDecimal::add);
-
-         return total;
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
+
+    /**
+     * Retorna as posições de renda fixa calculadas para uma data específica.
+     * Útil para construir gráficos de evolução patrimonial.
+     */
+    public List<AssetPositionDto> getAllFixedIncomePositionsForDate(LocalDate calculationDate) {
+        return fixedIncomeRepository.findAll().stream()
+                .filter(asset -> !asset.getInvestmentDate().isAfter(calculationDate))
+                .map(asset -> calculatePositionForDate(asset, calculationDate))
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * Calcula a posição de um ativo de renda fixa em uma data específica.
+     */
+    private AssetPositionDto calculatePositionForDate(FixedIncomeAsset asset, LocalDate calculationDate) {
+        // Se a data de cálculo for anterior ao investimento, retorna null
+        if (calculationDate.isBefore(asset.getInvestmentDate())) {
+            return null;
+        }
+
+        // Se já atingiu a maturidade antes da data de cálculo, usa a data de maturidade
+        LocalDate effectiveEndDate = calculationDate;
+        if (asset.getMaturityDate() != null && calculationDate.isAfter(asset.getMaturityDate())) {
+            effectiveEndDate = asset.getMaturityDate();
+        }
+
+        BigDecimal grossValue = calculateGrossValueForDate(asset, effectiveEndDate);
+        BigDecimal grossProfit = grossValue.subtract(asset.getInvestedAmount());
+
+        BigDecimal taxAmount = BigDecimal.ZERO;
+        if (grossProfit.compareTo(BigDecimal.ZERO) > 0) {
+            BigDecimal taxRate = incomeTaxService.getFixedIncomeTaxRate(
+                    asset.getInvestmentDate(),
+                    effectiveEndDate
+            );
+            taxAmount = grossProfit.multiply(taxRate).setScale(2, RoundingMode.HALF_UP);
+        }
+
+        BigDecimal netValue = grossValue.subtract(taxAmount);
+        BigDecimal netProfit = netValue.subtract(asset.getInvestedAmount());
+        BigDecimal profitability = asset.getInvestedAmount().compareTo(BigDecimal.ZERO) == 0 ?
+                BigDecimal.ZERO :
+                netProfit.divide(asset.getInvestedAmount(), 4, RoundingMode.HALF_UP)
+                        .multiply(BigDecimal.valueOf(100));
+
+        AssetPositionDto dto = new AssetPositionDto();
+        dto.setId(asset.getId());
+        dto.setAssetType(FIXED_INCOME);
+        dto.setName(asset.getName());
+        dto.setTicker(asset.getName());
+        dto.setTotalInvested(asset.getInvestedAmount());
+        dto.setCurrentValue(netValue.setScale(2, RoundingMode.HALF_UP));
+        dto.setProfitOrLoss(netProfit.setScale(2, RoundingMode.HALF_UP));
+        dto.setProfitability(profitability.setScale(2, RoundingMode.HALF_UP));
+        return dto;
+    }
+
+    /**
+     * Calcula o valor bruto do ativo até uma data específica.
+     */
+    private BigDecimal calculateGrossValueForDate(FixedIncomeAsset asset, LocalDate endDate) {
+        LocalDate startDate = asset.getInvestmentDate();
+        if (!endDate.isAfter(startDate)) {
+            return asset.getInvestedAmount();
+        }
+
+        return switch (asset.getIndexType()) {
+            case CDI, SELIC -> calculateCdiGrossValueForDate(asset, startDate, endDate);
+            case PRE_FIXED -> calculatePrefixedGrossValueForDate(asset, startDate, endDate);
+            default -> asset.getInvestedAmount();
+        };
+    }
+
+    private BigDecimal calculateCdiGrossValueForDate(FixedIncomeAsset asset, LocalDate startDate, LocalDate endDate) {
+        Map<LocalDate, BigDecimal> cdiRates = indexService.getCdiRatesForPeriod(startDate, endDate);
+        if (cdiRates.isEmpty()) {
+            return asset.getInvestedAmount();
+        }
+
+        BigDecimal accumulatedFactor = BigDecimal.ONE;
+        BigDecimal contractedRatePercentage = asset.getContractedRate()
+                .divide(new BigDecimal("100"), 10, RoundingMode.HALF_UP);
+
+        for (LocalDate date = startDate; date.isBefore(endDate); date = date.plusDays(1)) {
+            BigDecimal dailyCdi = cdiRates.get(date);
+            if (dailyCdi != null) {
+                BigDecimal dailyFactor = BigDecimal.ONE.add(dailyCdi.multiply(contractedRatePercentage));
+                accumulatedFactor = accumulatedFactor.multiply(dailyFactor);
+            }
+        }
+        return asset.getInvestedAmount().multiply(accumulatedFactor);
+    }
+
+    private BigDecimal calculatePrefixedGrossValueForDate(FixedIncomeAsset asset, LocalDate startDate, LocalDate endDate) {
+        long days = businessDayService.countBusinessDays(startDate, endDate);
+        double annualRate = asset.getContractedRate()
+                .divide(new BigDecimal("100"), 10, RoundingMode.HALF_UP)
+                .doubleValue();
+        double dailyFactor = Math.pow(1 + annualRate, 1.0 / 252.0);
+        double finalAmount = asset.getInvestedAmount().doubleValue() * Math.pow(dailyFactor, days);
+        return BigDecimal.valueOf(finalAmount);
+    }
+
+
 }
