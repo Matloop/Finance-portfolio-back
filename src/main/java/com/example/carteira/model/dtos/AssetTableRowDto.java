@@ -1,5 +1,6 @@
 package com.example.carteira.model.dtos;
 
+import com.example.carteira.model.enums.AssetType;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.Setter;
@@ -19,4 +20,5 @@ public class AssetTableRowDto {
     private BigDecimal currentValue;
     private BigDecimal profitability;
     private BigDecimal portfolioPercentage;
+    AssetType assetType;
 }
