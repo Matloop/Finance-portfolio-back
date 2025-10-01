@@ -13,4 +13,7 @@ public interface TransactionRepository extends JpaRepository<Transaction, Long> 
 
     @Query("SELECT DISTINCT t.ticker, t.market FROM Transaction t")
     List<String> findDistinctTickers();
+
+    void deleteByTicker(String ticker);
+
 }

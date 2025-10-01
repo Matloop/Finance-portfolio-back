@@ -56,7 +56,8 @@ public class DashboardViewService {
                                             asset.getCurrentPrice(),
                                             asset.getCurrentValue(),
                                             asset.getProfitability(),
-                                            portfolioPercentage
+                                            portfolioPercentage,
+                                            asset.getAssetType()
                                     );
                                 })
                                 .sorted(Comparator.comparing(AssetTableRowDto::getCurrentValue).reversed())
