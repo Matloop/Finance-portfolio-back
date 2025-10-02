@@ -16,6 +16,7 @@ import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 @Service
 public class PortfolioService {
@@ -53,23 +54,38 @@ public class PortfolioService {
         return new PortfolioDashboardDto(summary, percentages, assetsGrouped);
     }
 
-    public PortfolioEvolutionDto getPortfolioEvolutionData() {
+    public PortfolioEvolutionDto getPortfolioEvolutionData(AssetType assetType, String ticker) {
         List<LocalDate> dates = new ArrayList<>();
         LocalDate today = LocalDate.now();
         for (int i = 0; i < 12; i++) {
             dates.add(today.minusMonths(i).withDayOfMonth(1));
         }
-        Collections.reverse(dates);
 
         List<Transaction> allTransactions = transactionRepository.findAll();
 
+        Collections.reverse(dates);
+        //aplica os filtros
+        Stream<Transaction> filteredStream = allTransactions.stream();
+        if (assetType != null) {
+            filteredStream = filteredStream.filter(t -> assetType.equals(t.getAssetType()));
+        }
+        if (ticker != null && !ticker.isBlank()) {
+            filteredStream = filteredStream.filter(t -> ticker.equalsIgnoreCase(t.getTicker()));
+        }
+        List<Transaction> filteredTransactions = filteredStream.collect(Collectors.toList());
+
+
         List<PortfolioEvolutionPointDto> evolutionPoints = dates.stream()
-                .map(date -> calculatePortfolioSnapshot(allTransactions, date))
+                .map(date -> calculatePortfolioSnapshot(filteredTransactions, date))
                 .collect(Collectors.toList());
 
         evolutionPoints.add(calculatePortfolioSnapshot(allTransactions, today));
 
         return new PortfolioEvolutionDto(evolutionPoints);
+    }
+
+    public PortfolioEvolutionDto getPortfolioEvolutionData() {
+        return getPortfolioEvolutionData(null, null);
     }
 
     private PortfolioEvolutionPointDto calculatePortfolioSnapshot(List<Transaction> allTransactions, LocalDate date) {

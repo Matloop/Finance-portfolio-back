@@ -422,30 +422,32 @@ public class WebScraperService implements MarketDataProvider {
                         return Mono.empty();
                     }
 
-                    // Encontra o resultado de busca mais relevante para stocks/ETFs
+                    // A busca retorna um Optional<YahooQuoteDto> (uma "caixa")
                     Optional<YahooQuoteDto> bestMatch = response.quotes().stream()
                             .filter(q -> "EQUITY".equalsIgnoreCase(q.quoteType()) || "ETF".equalsIgnoreCase(q.quoteType()))
                             .findFirst()
                             .or(() -> response.quotes().stream().findFirst());
 
+                    // 1. Verificamos se a caixa está vazia. Se estiver, paramos aqui.
                     if (bestMatch.isEmpty()) {
+                        logger.warn("Nenhum resultado compatível (EQUITY/ETF) encontrado para '{}'", searchTerm);
                         return Mono.empty();
                     }
 
-                    // Converte o resultado para nosso DTO padronizado
-                    AssetSearchResultDto searchResult = mapYahooQuoteToSearchResult(bestMatch.get());
+                    // 2. Se a caixa não está vazia, pegamos o objeto de dentro dela.
+                    YahooQuoteDto foundQuote = bestMatch.get();
+
+                    AssetSearchResultDto searchResult = mapYahooQuoteToSearchResult(foundQuote);
                     if (searchResult == null) return Mono.empty();
 
                     logger.info("Busca via API encontrou o ticker: {} para o termo '{}'", searchResult.ticker(), searchTerm);
 
-                    // Cria um NOVO AssetToFetch com os dados CORRETOS encontrados na busca
                     AssetToFetch foundAsset = new AssetToFetch(
                             searchResult.ticker(),
                             searchResult.market(),
                             searchResult.assetType()
                     );
 
-                    // Chama o scraping novamente, mas sem a lógica de fallback para evitar loops infinitos
                     String url = BASE_URL + foundAsset.ticker();
                     return Mono.fromCallable(() -> {
                                 Document doc = Jsoup.connect(url).userAgent(USER_AGENT).get();
@@ -453,19 +455,7 @@ public class WebScraperService implements MarketDataProvider {
                             })
                             .subscribeOn(Schedulers.boundedElastic())
                             .filter(Objects::nonNull)
-                            .map(priceData -> {
-                                // Aplica conversão se necessário
-                                if (foundAsset.market() == Market.US) {
-                                    BigDecimal priceInUsd = priceData.price();
-                                    if (this.usdToBrlRate.compareTo(BigDecimal.ZERO) > 0) {
-                                        BigDecimal priceInBrl = priceInUsd.multiply(this.usdToBrlRate)
-                                                .setScale(2, RoundingMode.HALF_UP);
-                                        return new PriceData(originalAsset.ticker(), priceInBrl);
-                                    }
-                                }
-                                // Retorna com o ticker ORIGINAL do usuário
-                                return new PriceData(originalAsset.ticker(), priceData.price());
-                            });
+                            .map(priceData -> new PriceData(originalAsset.ticker(), priceData.price())); // Retorna o preço na moeda original
                 });
     }
 }
