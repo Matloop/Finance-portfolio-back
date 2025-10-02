@@ -122,7 +122,7 @@ public class PortfolioCalculatorService {
             return null;
         }
 
-        if (Market.US.equals(key.market()) || AssetType.CRYPTO.equals(key.assetType())) {
+        if (Market.US.equals(key.market()) ) {
             BigDecimal usdToBrlRate = exchangeRateCache.computeIfAbsent(calculationDate, k ->
                     (isToday ? exchangeRateService.fetchUsdToBrlRate() : exchangeRateService.fetchHistoricalUsdToBrlRate(k))
                             .map(Optional::of)
