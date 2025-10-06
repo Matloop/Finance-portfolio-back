@@ -13,4 +13,5 @@ public class PortfolioSummaryDto {
     BigDecimal totalHeritage;
     BigDecimal totalInvested;
     BigDecimal profitability;
+    BigDecimal yearlyProfitability;
 }
