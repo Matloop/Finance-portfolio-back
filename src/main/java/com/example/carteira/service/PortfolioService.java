@@ -38,16 +38,42 @@ public class PortfolioService {
     }
 
     public PortfolioDashboardDto getPortfolioDashboardData() {
+        LocalDate today = LocalDate.now();
+        LocalDate twelveMonthsAgo = today.minusMonths(12);
         List<Transaction> allTransactions = transactionRepository.findAll();
-        List<AssetPositionDto> allCurrentAssets = calculatorService.calculateConsolidatedPortfolio(allTransactions, LocalDate.now());
 
-        BigDecimal totalHeritage = allCurrentAssets.stream().map(AssetPositionDto::getCurrentValue).reduce(BigDecimal.ZERO, BigDecimal::add);
-        BigDecimal totalInvested = allCurrentAssets.stream().map(AssetPositionDto::getTotalInvested).reduce(BigDecimal.ZERO, BigDecimal::add);
+        List<AssetPositionDto> allCurrentAssets = calculatorService.calculateConsolidatedPortfolio(allTransactions, today);
+
+        // =======================> CORREÇÃO APLICADA AQUI <=======================
+        // Usando getters (ex: .getCurrentValue()) em vez de referências de método incorretas
+        BigDecimal totalHeritage = allCurrentAssets.stream()
+                .map(AssetPositionDto::getCurrentValue)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        BigDecimal totalInvested = allCurrentAssets.stream()
+                .map(AssetPositionDto::getTotalInvested)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        List<AssetPositionDto> assetsTwelveMonthsAgo = calculatorService.calculateConsolidatedPortfolio(allTransactions, twelveMonthsAgo);
+
+        BigDecimal heritageTwelveMonthsAgo = assetsTwelveMonthsAgo.stream()
+                .map(AssetPositionDto::getCurrentValue)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
         BigDecimal profitability = totalHeritage.compareTo(totalInvested) != 0 && totalInvested.compareTo(BigDecimal.ZERO) != 0
                 ? (totalHeritage.subtract(totalInvested)).divide(totalInvested, 4, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100))
                 : BigDecimal.ZERO;
 
-        PortfolioSummaryDto summary = new PortfolioSummaryDto(totalHeritage, totalInvested, profitability);
+        BigDecimal yearlyProfitability;
+        if (heritageTwelveMonthsAgo.compareTo(BigDecimal.ZERO) > 0) {
+            yearlyProfitability = totalHeritage.subtract(heritageTwelveMonthsAgo)
+                    .divide(heritageTwelveMonthsAgo, 4, RoundingMode.HALF_UP)
+                    .multiply(BigDecimal.valueOf(100));
+        } else {
+            yearlyProfitability = BigDecimal.ZERO;
+        }
+
+        PortfolioSummaryDto summary = new PortfolioSummaryDto(totalHeritage, totalInvested, profitability, yearlyProfitability);
         Map<String, AllocationNodeDto> percentages = viewService.buildAllocationTree(allCurrentAssets, totalHeritage);
         Map<String, List<AssetSubCategoryDto>> assetsGrouped = viewService.buildAssetHierarchy(allCurrentAssets, totalHeritage);
 
@@ -57,14 +83,17 @@ public class PortfolioService {
     public PortfolioEvolutionDto getPortfolioEvolutionData(AssetType assetType, String ticker) {
         List<LocalDate> dates = new ArrayList<>();
         LocalDate today = LocalDate.now();
-        for (int i = 0; i < 12; i++) {
+
+        // LÓGICA SIMPLIFICADA E ROBUSTA: Sempre usa o primeiro dia do mês.
+        // Garante 13 pontos de dados consistentes.
+        for (int i = 0; i <= 12; i++) {
             dates.add(today.minusMonths(i).withDayOfMonth(1));
         }
+        // A lista estará em ordem decrescente (hoje, mês passado, ...), então invertemos.
+        Collections.reverse(dates);
 
         List<Transaction> allTransactions = transactionRepository.findAll();
 
-        Collections.reverse(dates);
-        //aplica os filtros
         Stream<Transaction> filteredStream = allTransactions.stream();
         if (assetType != null) {
             filteredStream = filteredStream.filter(t -> assetType.equals(t.getAssetType()));
@@ -74,12 +103,19 @@ public class PortfolioService {
         }
         List<Transaction> filteredTransactions = filteredStream.collect(Collectors.toList());
 
-
         List<PortfolioEvolutionPointDto> evolutionPoints = dates.stream()
                 .map(date -> calculatePortfolioSnapshot(filteredTransactions, date))
                 .collect(Collectors.toList());
 
-        evolutionPoints.add(calculatePortfolioSnapshot(allTransactions, today));
+        // O snapshot de "hoje" é calculado separadamente para garantir o valor mais atual.
+        PortfolioEvolutionPointDto todaySnapshot = calculatePortfolioSnapshot(filteredTransactions, today);
+
+        // Substitui o último ponto (que era dia 1 do mês atual) pelo ponto exato de hoje.
+        if (!evolutionPoints.isEmpty()) {
+            evolutionPoints.set(evolutionPoints.size() - 1, todaySnapshot);
+        } else {
+            evolutionPoints.add(todaySnapshot);
+        }
 
         return new PortfolioEvolutionDto(evolutionPoints);
     }
