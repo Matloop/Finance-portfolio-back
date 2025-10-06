@@ -81,17 +81,7 @@ public class PortfolioService {
     }
 
     public PortfolioEvolutionDto getPortfolioEvolutionData(AssetType assetType, String ticker) {
-        List<LocalDate> dates = new ArrayList<>();
         LocalDate today = LocalDate.now();
-
-        // LÓGICA SIMPLIFICADA E ROBUSTA: Sempre usa o primeiro dia do mês.
-        // Garante 13 pontos de dados consistentes.
-        for (int i = 0; i <= 12; i++) {
-            dates.add(today.minusMonths(i).withDayOfMonth(1));
-        }
-        // A lista estará em ordem decrescente (hoje, mês passado, ...), então invertemos.
-        Collections.reverse(dates);
-
         List<Transaction> allTransactions = transactionRepository.findAll();
 
         Stream<Transaction> filteredStream = allTransactions.stream();
@@ -103,19 +93,37 @@ public class PortfolioService {
         }
         List<Transaction> filteredTransactions = filteredStream.collect(Collectors.toList());
 
+        if (filteredTransactions.isEmpty()) {
+            return new PortfolioEvolutionDto(Collections.emptyList());
+        }
+
+        Optional<LocalDate> firstTransactionDateOpt = filteredTransactions.stream()
+                .map(Transaction::getTransactionDate)
+                .min(LocalDate::compareTo);
+
+        LocalDate firstTransactionDate = firstTransactionDateOpt.get();
+        LocalDate twelveMonthsAgo = today.minusMonths(12);
+        LocalDate chartStartDate = firstTransactionDate.isAfter(twelveMonthsAgo) ? firstTransactionDate : twelveMonthsAgo;
+
+        Set<LocalDate> dates = new LinkedHashSet<>(); // Usar LinkedHashSet para evitar datas duplicadas e manter a ordem
+
+        // 1. Adiciona a data de início exata como o primeiro ponto.
+        dates.add(chartStartDate);
+
+        // 2. Adiciona o primeiro dia de cada mês subsequente.
+        LocalDate currentDate = chartStartDate.plusMonths(1).withDayOfMonth(1);
+        while (!currentDate.isAfter(today)) {
+            dates.add(currentDate);
+            currentDate = currentDate.plusMonths(1);
+        }
+
+        // 3. Adiciona a data de hoje como o último ponto.
+        dates.add(today);
+
+        // 4. Calcula os snapshots para a lista de datas única e ordenada.
         List<PortfolioEvolutionPointDto> evolutionPoints = dates.stream()
                 .map(date -> calculatePortfolioSnapshot(filteredTransactions, date))
                 .collect(Collectors.toList());
-
-        // O snapshot de "hoje" é calculado separadamente para garantir o valor mais atual.
-        PortfolioEvolutionPointDto todaySnapshot = calculatePortfolioSnapshot(filteredTransactions, today);
-
-        // Substitui o último ponto (que era dia 1 do mês atual) pelo ponto exato de hoje.
-        if (!evolutionPoints.isEmpty()) {
-            evolutionPoints.set(evolutionPoints.size() - 1, todaySnapshot);
-        } else {
-            evolutionPoints.add(todaySnapshot);
-        }
 
         return new PortfolioEvolutionDto(evolutionPoints);
     }
