@@ -4,6 +4,7 @@ import com.example.carteira.model.FixedIncomeAsset;
 import com.example.carteira.model.Transaction;
 import com.example.carteira.model.dtos.*;
 import com.example.carteira.model.enums.AssetType;
+import com.example.carteira.model.enums.Market;
 import com.example.carteira.model.enums.TransactionType;
 import com.example.carteira.repository.FixedIncomeRepository;
 import com.example.carteira.repository.TransactionRepository;
@@ -20,7 +21,11 @@ import java.util.stream.Stream;
 
 @Service
 public class PortfolioService {
-
+    private static final Map<String, AssetType> FRIENDLY_NAME_TO_ASSET_TYPE = Map.of(
+            "ações", AssetType.STOCK,
+            "etfs", AssetType.ETF,
+            "renda fixa", AssetType.FIXED_INCOME
+    );
     private final TransactionRepository transactionRepository;
     private final PortfolioCalculatorService calculatorService;
     private final DashboardViewService viewService;
@@ -37,6 +42,33 @@ public class PortfolioService {
 
     }
 
+    private List<Transaction> getFilteredTransactions(List<Transaction> allTransactions, String category, String assetType, String ticker) {
+        Stream<Transaction> filteredStream = allTransactions.stream();
+
+        if (ticker != null && !ticker.isBlank() && !"all".equalsIgnoreCase(ticker)) {
+            return filteredStream.filter(t -> ticker.equalsIgnoreCase(t.getTicker())).collect(Collectors.toList());
+        }
+
+        if (category != null && !category.isBlank() && !"all".equalsIgnoreCase(category)) {
+            if ("cripto".equalsIgnoreCase(category)) {
+                filteredStream = filteredStream.filter(t -> t.getAssetType() == AssetType.CRYPTO);
+            } else if ("brasil".equalsIgnoreCase(category)) {
+                filteredStream = filteredStream.filter(t -> t.getMarket() == Market.B3 || t.getAssetType() == AssetType.FIXED_INCOME);
+            } else if ("eua".equalsIgnoreCase(category)) {
+                filteredStream = filteredStream.filter(t -> t.getMarket() == Market.US);
+            }
+        }
+
+        if (assetType != null && !assetType.isBlank() && !"all".equalsIgnoreCase(assetType)) {
+            AssetType type = FRIENDLY_NAME_TO_ASSET_TYPE.get(assetType.toLowerCase());
+            if (type != null) {
+                filteredStream = filteredStream.filter(t -> t.getAssetType() == type);
+            }
+        }
+
+        return filteredStream.collect(Collectors.toList());
+    }
+
     public PortfolioDashboardDto getPortfolioDashboardData() {
         LocalDate today = LocalDate.now();
         LocalDate twelveMonthsAgo = today.minusMonths(12);
@@ -44,8 +76,6 @@ public class PortfolioService {
 
         List<AssetPositionDto> allCurrentAssets = calculatorService.calculateConsolidatedPortfolio(allTransactions, today);
 
-        // =======================> CORREÇÃO APLICADA AQUI <=======================
-        // Usando getters (ex: .getCurrentValue()) em vez de referências de método incorretas
         BigDecimal totalHeritage = allCurrentAssets.stream()
                 .map(AssetPositionDto::getCurrentValue)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
@@ -80,23 +110,18 @@ public class PortfolioService {
         return new PortfolioDashboardDto(summary, percentages, assetsGrouped);
     }
 
-    public PortfolioEvolutionDto getPortfolioEvolutionData(AssetType assetType, String ticker) {
+    public PortfolioEvolutionDto getPortfolioEvolutionData(String category, String assetType, String ticker) {
         LocalDate today = LocalDate.now();
         List<Transaction> allTransactions = transactionRepository.findAll();
 
-        Stream<Transaction> filteredStream = allTransactions.stream();
-        if (assetType != null) {
-            filteredStream = filteredStream.filter(t -> assetType.equals(t.getAssetType()));
-        }
-        if (ticker != null && !ticker.isBlank()) {
-            filteredStream = filteredStream.filter(t -> ticker.equalsIgnoreCase(t.getTicker()));
-        }
-        List<Transaction> filteredTransactions = filteredStream.collect(Collectors.toList());
+        // 1. RESPONSABILIDADE ÚNICA: Obter a lista de transações já filtrada.
+        List<Transaction> filteredTransactions = getFilteredTransactions(allTransactions, category, assetType, ticker);
 
         if (filteredTransactions.isEmpty()) {
             return new PortfolioEvolutionDto(Collections.emptyList());
         }
 
+        // 2. RESPONSABILIDADE ÚNICA: Calcular a evolução com base nos dados filtrados.
         Optional<LocalDate> firstTransactionDateOpt = filteredTransactions.stream()
                 .map(Transaction::getTransactionDate)
                 .min(LocalDate::compareTo);
@@ -105,22 +130,15 @@ public class PortfolioService {
         LocalDate twelveMonthsAgo = today.minusMonths(12);
         LocalDate chartStartDate = firstTransactionDate.isAfter(twelveMonthsAgo) ? firstTransactionDate : twelveMonthsAgo;
 
-        Set<LocalDate> dates = new LinkedHashSet<>(); // Usar LinkedHashSet para evitar datas duplicadas e manter a ordem
-
-        // 1. Adiciona a data de início exata como o primeiro ponto.
+        Set<LocalDate> dates = new LinkedHashSet<>();
         dates.add(chartStartDate);
-
-        // 2. Adiciona o primeiro dia de cada mês subsequente.
         LocalDate currentDate = chartStartDate.plusMonths(1).withDayOfMonth(1);
         while (!currentDate.isAfter(today)) {
             dates.add(currentDate);
             currentDate = currentDate.plusMonths(1);
         }
-
-        // 3. Adiciona a data de hoje como o último ponto.
         dates.add(today);
 
-        // 4. Calcula os snapshots para a lista de datas única e ordenada.
         List<PortfolioEvolutionPointDto> evolutionPoints = dates.stream()
                 .map(date -> calculatePortfolioSnapshot(filteredTransactions, date))
                 .collect(Collectors.toList());
@@ -129,7 +147,7 @@ public class PortfolioService {
     }
 
     public PortfolioEvolutionDto getPortfolioEvolutionData() {
-        return getPortfolioEvolutionData(null, null);
+        return getPortfolioEvolutionData(null, null,null);
     }
 
     private PortfolioEvolutionPointDto calculatePortfolioSnapshot(List<Transaction> allTransactions, LocalDate date) {
