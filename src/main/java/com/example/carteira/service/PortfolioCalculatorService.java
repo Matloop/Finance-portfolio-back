@@ -30,7 +30,9 @@ public class PortfolioCalculatorService {
     private final FixedIncomeService fixedIncomeService;
     private final ExchangeRateService exchangeRateService;
 
-    // Chaves privadas para a lógica interna deste serviço
+    // =======================> CORREÇÃO APLICADA AQUI <=======================
+    // Adicionando a definição do record que estava faltando.
+    private record PositionCalculationResult(BigDecimal quantity, BigDecimal totalInvested) {}
     private record AssetKey(String ticker, AssetType assetType, Market market) {}
     private record MarketDataKey(String ticker, LocalDate date) {}
 
@@ -42,17 +44,10 @@ public class PortfolioCalculatorService {
         this.exchangeRateService = exchangeRateService;
     }
 
-    /**
-     * Ponto de entrada principal para calcular as posições consolidadas da carteira.
-     * Este método público inicializa os caches para uma única execução.
-     */
     public List<AssetPositionDto> calculateConsolidatedPortfolio(List<Transaction> transactions, LocalDate calculationDate) {
         return calculateConsolidatedPortfolio(transactions, calculationDate, new HashMap<>(), new HashMap<>());
     }
 
-    /**
-     * Lógica interna que utiliza caches para otimizar chamadas repetidas à API.
-     */
     private List<AssetPositionDto> calculateConsolidatedPortfolio(
             List<Transaction> transactions,
             LocalDate calculationDate,
@@ -63,7 +58,6 @@ public class PortfolioCalculatorService {
                 .filter(t -> t.getTicker() != null)
                 .collect(Collectors.groupingBy(t -> new AssetKey(t.getTicker(), t.getAssetType(), t.getMarket())));
 
-        // CORREÇÃO: Usando .stream() para evitar problemas de concorrência com HashMap.
         Stream<AssetPositionDto> transactionalAssetsStream = groupedTransactions.entrySet().stream()
                 .map(entry -> calculateSinglePosition(entry.getKey(), entry.getValue(), calculationDate, priceCache, exchangeRateCache))
                 .filter(Objects::nonNull);
@@ -84,80 +78,113 @@ public class PortfolioCalculatorService {
             Map<MarketDataKey, Optional<BigDecimal>> priceCache,
             Map<LocalDate, Optional<BigDecimal>> exchangeRateCache) {
 
-        BigDecimal totalQuantity = BigDecimal.ZERO;
-        BigDecimal totalCost = BigDecimal.ZERO;
-        BigDecimal totalBuyQuantity = BigDecimal.ZERO;
-        for (Transaction t : transactions) {
-            if (TransactionType.BUY.equals(t.getTransactionType())) {
-                BigDecimal transactionCost = t.getQuantity().multiply(t.getPricePerUnit());
-                if (t.getOtherCosts() != null) {
-                    transactionCost = transactionCost.add(t.getOtherCosts());
-                }
-                totalCost = totalCost.add(transactionCost);
-                totalQuantity = totalQuantity.add(t.getQuantity());
-                totalBuyQuantity = totalBuyQuantity.add(t.getQuantity());
-            } else {
-                totalQuantity = totalQuantity.subtract(t.getQuantity());
-            }
-        }
-        if (totalQuantity.compareTo(BigDecimal.ZERO) <= 0) return null;
-        BigDecimal averagePrice = totalCost.divide(totalBuyQuantity, 8, RoundingMode.HALF_UP);
-
-        boolean isToday = calculationDate.isEqual(LocalDate.now());
-        MarketDataKey cacheKey = new MarketDataKey(key.ticker(), calculationDate);
-
-        BigDecimal price = priceCache.computeIfAbsent(cacheKey, k -> {
-            Mono<PriceData> priceMono = isToday
-                    ? getCurrentPriceWithFallback(new AssetToFetch(k.ticker(), key.market(), key.assetType()))
-                    : getHistoricalPriceWithFallback(new AssetToFetch(k.ticker(), key.market(), key.assetType()), k.date());
-
-            return priceMono.map(PriceData::price)
-                    .map(Optional::of)
-                    .defaultIfEmpty(Optional.empty())
-                    .block();
-        }).orElse(null);
-
-        if (price == null) {
-            logger.warn("Não foi possível encontrar o preço para {} na data {}", key.ticker(), calculationDate);
+        PositionCalculationResult initialPosition = calculateInitialPosition(transactions);
+        if (initialPosition == null) {
             return null;
         }
 
-        if (Market.US.equals(key.market()) ) {
-            BigDecimal usdToBrlRate = exchangeRateCache.computeIfAbsent(calculationDate, k ->
-                    (isToday ? exchangeRateService.fetchUsdToBrlRate() : exchangeRateService.fetchHistoricalUsdToBrlRate(k))
-                            .map(Optional::of)
-                            .defaultIfEmpty(Optional.empty())
-                            .block()
-            ).orElse(null);
+        Optional<BigDecimal> priceInOriginalCurrencyOpt = fetchAndCachePrice(key, calculationDate, priceCache);
 
-            if (usdToBrlRate != null) {
-                price = price.multiply(usdToBrlRate);
-                averagePrice = averagePrice.multiply(usdToBrlRate);
-            } else {
-                logger.warn("Taxa de câmbio não encontrada para {}. Valor de {} será ignorado.", calculationDate, key.ticker());
-                return null;
-            }
+        BigDecimal priceInBRL = null;
+        BigDecimal totalInvestedInBRL = initialPosition.totalInvested();
+        BigDecimal averagePriceInBRL = totalInvestedInBRL.divide(initialPosition.quantity(), 8, RoundingMode.HALF_UP);
+
+        if (priceInOriginalCurrencyOpt.isPresent()) {
+            priceInBRL = applyCurrencyConversion(
+                    priceInOriginalCurrencyOpt.get(), key, calculationDate, exchangeRateCache, true
+            );
         }
+        totalInvestedInBRL = applyCurrencyConversion(
+                initialPosition.totalInvested(), key, calculationDate, exchangeRateCache, false
+        );
+        averagePriceInBRL = totalInvestedInBRL.divide(initialPosition.quantity(), 8, RoundingMode.HALF_UP);
 
-        BigDecimal currentValue = price.multiply(totalQuantity);
-        BigDecimal currentPositionCost = totalQuantity.multiply(averagePrice);
-        BigDecimal profitOrLoss = currentValue.subtract(currentPositionCost);
-        BigDecimal profitability = currentPositionCost.compareTo(BigDecimal.ZERO) > 0
-                ? profitOrLoss.divide(currentPositionCost, 4, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100))
-                : BigDecimal.ZERO;
+        BigDecimal currentValue;
+        BigDecimal profitability;
+
+        if (priceInBRL == null) {
+            currentValue = totalInvestedInBRL;
+            priceInBRL = averagePriceInBRL;
+            profitability = BigDecimal.ZERO;
+        } else {
+            currentValue = priceInBRL.multiply(initialPosition.quantity());
+            BigDecimal profitOrLoss = currentValue.subtract(totalInvestedInBRL);
+            profitability = totalInvestedInBRL.compareTo(BigDecimal.ZERO) > 0
+                    ? profitOrLoss.divide(totalInvestedInBRL, 4, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100))
+                    : BigDecimal.ZERO;
+        }
 
         AssetPositionDto position = new AssetPositionDto();
         position.setTicker(key.ticker());
+        position.setName(null); // ou o nome correto se você o tiver
         position.setAssetType(key.assetType());
         position.setMarket(key.market());
-        position.setTotalQuantity(totalQuantity);
-        position.setAveragePrice(averagePrice);
-        position.setCurrentPrice(price);
-        position.setTotalInvested(currentPositionCost);
+        position.setTotalQuantity(initialPosition.quantity());
+        position.setAveragePrice(averagePriceInBRL);
+        position.setCurrentPrice(priceInBRL);
+        position.setTotalInvested(totalInvestedInBRL);
         position.setCurrentValue(currentValue);
-        position.setProfitOrLoss(profitOrLoss);
+        position.setProfitOrLoss(currentValue.subtract(totalInvestedInBRL));
         position.setProfitability(profitability);
+
         return position;
+    }
+
+    private PositionCalculationResult calculateInitialPosition(List<Transaction> transactions) {
+        transactions.sort(Comparator.comparing(Transaction::getTransactionDate));
+
+        BigDecimal currentQuantity = BigDecimal.ZERO;
+        BigDecimal totalInvestedValue = BigDecimal.ZERO;
+
+        for (Transaction t : transactions) {
+            if (TransactionType.BUY.equals(t.getTransactionType())) {
+                BigDecimal transactionCost = t.getQuantity().multiply(t.getPricePerUnit());
+                if (t.getOtherCosts() != null) transactionCost = transactionCost.add(t.getOtherCosts());
+                totalInvestedValue = totalInvestedValue.add(transactionCost);
+                currentQuantity = currentQuantity.add(t.getQuantity());
+            } else { // SELL
+                if (currentQuantity.compareTo(BigDecimal.ZERO) > 0) {
+                    BigDecimal avgPrice = totalInvestedValue.divide(currentQuantity, 16, RoundingMode.HALF_UP);
+                    totalInvestedValue = totalInvestedValue.subtract(t.getQuantity().multiply(avgPrice));
+                }
+                currentQuantity = currentQuantity.subtract(t.getQuantity());
+            }
+        }
+
+        if (currentQuantity.compareTo(BigDecimal.ZERO) <= 0) return null;
+        return new PositionCalculationResult(currentQuantity, totalInvestedValue);
+    }
+
+    private Optional<BigDecimal> fetchAndCachePrice(AssetKey key, LocalDate date, Map<MarketDataKey, Optional<BigDecimal>> priceCache) {
+        MarketDataKey cacheKey = new MarketDataKey(key.ticker(), date);
+        return priceCache.computeIfAbsent(cacheKey, k -> {
+            Mono<PriceData> priceMono = date.isEqual(LocalDate.now())
+                    ? getCurrentPriceWithFallback(new AssetToFetch(k.ticker(), key.market(), key.assetType()))
+                    : getHistoricalPriceWithFallback(new AssetToFetch(k.ticker(), key.market(), key.assetType()), k.date());
+            return priceMono.map(PriceData::price).map(Optional::of).defaultIfEmpty(Optional.empty()).block();
+        });
+    }
+
+    private BigDecimal applyCurrencyConversion(BigDecimal valueToConvert, AssetKey key, LocalDate date, Map<LocalDate, Optional<BigDecimal>> exchangeRateCache, boolean isPrice) {
+        boolean needsConversion = isPrice
+                ? (AssetType.CRYPTO.equals(key.assetType()) || Market.US.equals(key.market()))
+                : Market.US.equals(key.market());
+
+        if (!needsConversion) {
+            return valueToConvert;
+        }
+
+        BigDecimal usdToBrlRate = exchangeRateCache.computeIfAbsent(date, k ->
+                (date.isEqual(LocalDate.now()) ? exchangeRateService.fetchUsdToBrlRate() : exchangeRateService.fetchHistoricalUsdToBrlRate(k))
+                        .map(Optional::of).defaultIfEmpty(Optional.empty()).block()
+        ).orElse(null);
+
+        if (usdToBrlRate != null) {
+            return valueToConvert.multiply(usdToBrlRate);
+        }
+
+        logger.warn("Taxa de câmbio não encontrada para {}. Não foi possível converter o valor do ativo {}", date, key.ticker());
+        return valueToConvert;
     }
 
     private Mono<PriceData> getCurrentPriceWithFallback(AssetToFetch asset) {
