@@ -36,10 +36,11 @@ public class PortfolioController {
     }
     @GetMapping("/evolution")
     public ResponseEntity<PortfolioEvolutionDto> getEvolutionData(
-            @RequestParam(required = false) AssetType assetType,
+            @RequestParam(required = false) String category,
+            @RequestParam(required = false) String assetType, // Renomeado de subFilter
             @RequestParam(required = false) String ticker
     ) {
-        return ResponseEntity.ok(portfolioService.getPortfolioEvolutionData(assetType, ticker));
+        return ResponseEntity.ok(portfolioService.getPortfolioEvolutionData(category, assetType, ticker));
     }
 
     @GetMapping("/invested-details")
