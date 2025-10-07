@@ -23,26 +23,35 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Objects;
-import java.util.Optional;
+import java.util.*;
 import java.util.stream.Collectors;
 
+/**
+ * CORREÇÕES APLICADAS:
+ * 1. Batch fetching via API de chart (evita scraping individual)
+ * 2. Fallback inteligente: API primeiro, scraping como último recurso
+ * 3. Paralelização controlada para scraping
+ * 4. Cache de tickers canônicos
+ * 5. Otimização do fluxo de criptomoedas (apenas API, sem scraping)
+ */
 @Service
 @Primary
 public class WebScraperService implements MarketDataProvider {
     private static final Logger logger = LoggerFactory.getLogger(WebScraperService.class);
     private static final String BASE_URL = "https://finance.yahoo.com/quote/";
+    private static final int MAX_CONCURRENT_SCRAPING = 5; // Limita scraping concorrente
+
     private final ExchangeRateService exchangeRateService;
     private BigDecimal usdToBrlRate = BigDecimal.ONE;
     private static final String USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" +
             " (KHTML, like Gecko) Chrome/94.0.4606.81 Safari/537.36";
     private final WebClient webClient;
+
+    // CORREÇÃO #1: Cache de tickers canônicos para evitar buscas repetidas
+    private final Map<String, String> canonicalTickerCache = new HashMap<>();
 
     public WebScraperService(ExchangeRateService exchangeRateService, WebClient.Builder webClientBuilder) {
         this.exchangeRateService = exchangeRateService;
@@ -53,29 +62,25 @@ public class WebScraperService implements MarketDataProvider {
         Element priceElement = doc.selectFirst("section[data-testid=\"quote-price\"] span[data-testid=\"qsp-price\"]");
 
         if (priceElement != null) {
-            String priceText = priceElement.text(); // Ex: "112,882.20"
-            logger.info("Texto do preço bruto para {}: '{}'", originalTicker, priceText);
-            // Lógica de parsing robusta que já está correta
+            String priceText = priceElement.text();
+            logger.debug("Texto do preço bruto para {}: '{}'", originalTicker, priceText);
+
             if (priceText.contains(",") && priceText.contains(".")) {
-                // Formato americano: "112,882.20" -> Removemos a vírgula de milhar.
                 priceText = priceText.replace(",", "");
             } else {
-                // Formato brasileiro/europeu: "35,52" -> Substituímos a vírgula por ponto.
                 priceText = priceText.replace(",", ".");
             }
-            logger.info("Texto do preço processado para {}: '{}'", originalTicker, priceText);
 
             try {
                 BigDecimal price = new BigDecimal(priceText);
-                logger.info("Preço extraído com sucesso para {}: {}", originalTicker, price);
+                logger.debug("Preço extraído com sucesso para {}: {}", originalTicker, price);
                 return new PriceData(originalTicker, price);
             } catch (NumberFormatException e) {
-                logger.error("Falha ao converter o texto limpo '{}' para BigDecimal para o ticker {}", priceText, originalTicker);
+                logger.error("Falha ao converter '{}' para BigDecimal para {}", priceText, originalTicker);
                 throw e;
             }
-
         } else {
-            logger.warn("Elemento de preço não encontrado no documento HTML para o ticker: {}. A estrutura da página pode ter mudado.", originalTicker);
+            logger.warn("Elemento de preço não encontrado para {}", originalTicker);
             return null;
         }
     }
@@ -84,7 +89,8 @@ public class WebScraperService implements MarketDataProvider {
     public Mono<PriceData> fetchHistoricalPrice(AssetToFetch asset, LocalDate date) {
         return findCanonicalTicker(asset)
                 .flatMap(canonicalTicker -> {
-                    logger.info("Buscando preço histórico para {} ({}) na data {}", asset.ticker(), canonicalTicker, date);
+                    logger.info("Buscando preço histórico para {} ({}) na data {}",
+                            asset.ticker(), canonicalTicker, date);
                     return webClient.get()
                             .uri(uriBuilder -> uriBuilder
                                     .path("/v8/finance/chart/" + canonicalTicker)
@@ -93,55 +99,79 @@ public class WebScraperService implements MarketDataProvider {
                                     .build())
                             .retrieve()
                             .bodyToMono(YahooChartResponseDto.class)
-                            .map(response -> {
-                                if (response != null && response.chart() != null && !response.chart().result().isEmpty()) {
-                                    ChartDataDto data = response.chart().result().get(0);
-                                    if (data != null && data.timestamp() != null && data.indicators() != null && !data.indicators().quote().isEmpty()) {
-                                        List<Long> timestamps = data.timestamp();
-                                        List<BigDecimal> prices = data.indicators().quote().get(0).close();
-                                        if (prices != null && timestamps.size() == prices.size()) {
-                                            for (int i = timestamps.size() - 1; i >= 0; i--) {
-                                                if (timestamps.get(i) != null && prices.get(i) != null) {
-                                                    LocalDate candleDate = Instant.ofEpochSecond(timestamps.get(i)).atZone(ZoneOffset.UTC).toLocalDate();
-                                                    if (!candleDate.isAfter(date)) {
-                                                        return new PriceData(asset.ticker(), prices.get(i));
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                return null;
-                            });
+                            .map(response -> extractHistoricalPriceFromChart(response, asset.ticker(), date));
                 })
                 .filter(Objects::nonNull)
                 .onErrorResume(e -> {
-                    logger.error("Erro ao buscar dados do gráfico histórico para {}: {}", asset.ticker(), e.getMessage());
+                    logger.error("Erro ao buscar preço histórico para {}: {}", asset.ticker(), e.getMessage());
                     return Mono.empty();
                 });
     }
 
+    private PriceData extractHistoricalPriceFromChart(YahooChartResponseDto response,
+                                                      String originalTicker,
+                                                      LocalDate date) {
+        if (response != null && response.chart() != null && !response.chart().result().isEmpty()) {
+            ChartDataDto data = response.chart().result().get(0);
+            if (data != null && data.timestamp() != null &&
+                    data.indicators() != null && !data.indicators().quote().isEmpty()) {
+
+                List<Long> timestamps = data.timestamp();
+                List<BigDecimal> prices = data.indicators().quote().get(0).close();
+
+                if (prices != null && timestamps.size() == prices.size()) {
+                    for (int i = timestamps.size() - 1; i >= 0; i--) {
+                        if (timestamps.get(i) != null && prices.get(i) != null) {
+                            LocalDate candleDate = Instant.ofEpochSecond(timestamps.get(i))
+                                    .atZone(ZoneOffset.UTC)
+                                    .toLocalDate();
+                            if (!candleDate.isAfter(date)) {
+                                return new PriceData(originalTicker, prices.get(i));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * CORREÇÃO #2: Busca ticker canônico com cache para evitar requisições repetidas
+     */
     private Mono<String> findCanonicalTicker(AssetToFetch asset) {
         final String searchTerm = asset.ticker();
 
+        // Verifica cache primeiro
+        String cached = canonicalTickerCache.get(searchTerm);
+        if (cached != null) {
+            logger.debug("💾 Ticker canônico recuperado do cache: {} -> {}", searchTerm, cached);
+            return Mono.just(cached);
+        }
+
         // Lógica específica para Cripto
         if (AssetType.CRYPTO.equals(asset.assetType())) {
-            return searchAndFilterYahooAPI(searchTerm, "CRYPTOCURRENCY");
+            return searchAndFilterYahooAPI(searchTerm, "CRYPTOCURRENCY")
+                    .doOnNext(ticker -> canonicalTickerCache.put(searchTerm, ticker));
         }
 
         // Lógica existente para Ações/ETFs
         if (!searchTerm.contains(" ") && searchTerm.length() < 10) {
             if (asset.market() == Market.B3 && !searchTerm.contains(".")) {
-                return Mono.just(searchTerm + ".SA");
+                String ticker = searchTerm + ".SA";
+                canonicalTickerCache.put(searchTerm, ticker);
+                return Mono.just(ticker);
             }
+            canonicalTickerCache.put(searchTerm, searchTerm);
             return Mono.just(searchTerm);
         }
 
-        return searchAndFilterYahooAPI(searchTerm, "EQUITY", "ETF", "INDEX");
+        return searchAndFilterYahooAPI(searchTerm, "EQUITY", "ETF", "INDEX")
+                .doOnNext(ticker -> canonicalTickerCache.put(searchTerm, ticker));
     }
 
     private Mono<String> searchAndFilterYahooAPI(String searchTerm, String... desiredQuoteTypes) {
-        logger.info("Buscando ticker canônico para '{}', tipos desejados: {}", searchTerm, Arrays.toString(desiredQuoteTypes));
+        logger.debug("Buscando ticker canônico para '{}', tipos: {}", searchTerm, Arrays.toString(desiredQuoteTypes));
 
         return this.webClient.get()
                 .uri(uriBuilder -> uriBuilder.path("/v1/finance/search").queryParam("q", searchTerm).build())
@@ -149,30 +179,213 @@ public class WebScraperService implements MarketDataProvider {
                 .bodyToMono(YahooSearchResponseDto.class)
                 .flatMap(response -> {
                     if (response.quotes() == null || response.quotes().isEmpty()) {
-                        logger.warn("Nenhum resultado encontrado na API de busca do Yahoo para o termo: {}", searchTerm);
+                        logger.warn("Nenhum resultado na busca do Yahoo para: {}", searchTerm);
                         return Mono.empty();
                     }
 
                     List<String> desiredTypesList = Arrays.asList(desiredQuoteTypes);
-
                     Optional<String> foundTicker = response.quotes().stream()
                             .filter(q -> desiredTypesList.contains(q.quoteType().toUpperCase()))
                             .findFirst()
                             .map(YahooQuoteDto::symbol);
 
                     String canonicalTicker = foundTicker.orElse(response.quotes().get(0).symbol());
-
-                    logger.info("Busca via API encontrou o ticker canônico: {} para o termo '{}'", canonicalTicker, searchTerm);
+                    logger.debug("Ticker canônico encontrado: {} para '{}'", canonicalTicker, searchTerm);
                     return Mono.just(canonicalTicker);
                 })
                 .onErrorResume(e -> Mono.empty());
     }
 
+    /**
+     * CORREÇÃO #3: Batch fetching via API de chart (muito mais rápido que scraping)
+     * Agrupa ativos por tipo e usa a estratégia mais eficiente
+     */
     @Override
     public Flux<PriceData> fetchPrices(List<AssetToFetch> assetsToFetch) {
         if (assetsToFetch.isEmpty()) return Flux.empty();
-        return Flux.fromIterable(assetsToFetch)
-                .flatMap(this::fetchSingleStockPrice);
+
+        // Separa criptomoedas de ações/ETFs
+        Map<Boolean, List<AssetToFetch>> grouped = assetsToFetch.stream()
+                .collect(Collectors.partitioningBy(a -> AssetType.CRYPTO.equals(a.assetType())));
+
+        List<AssetToFetch> cryptos = grouped.get(true);
+        List<AssetToFetch> stocksAndEtfs = grouped.get(false);
+
+        logger.info("📊 Buscando preços em lote: {} criptos, {} ações/ETFs",
+                cryptos.size(), stocksAndEtfs.size());
+
+        Flux<PriceData> cryptoFlux = fetchCryptoPricesBatch(cryptos);
+        Flux<PriceData> stockFlux = fetchStockPricesBatch(stocksAndEtfs);
+
+        return Flux.merge(cryptoFlux, stockFlux);
+    }
+
+    /**
+     * CORREÇÃO #4: Busca em lote de criptomoedas via API (sem scraping)
+     */
+    private Flux<PriceData> fetchCryptoPricesBatch(List<AssetToFetch> cryptos) {
+        if (cryptos.isEmpty()) return Flux.empty();
+
+        logger.info("🪙 Buscando {} criptomoedas via API do Yahoo", cryptos.size());
+
+        return Flux.fromIterable(cryptos)
+                .flatMap(this::fetchCryptocurrencyPriceViaAPI, 3); // 3 requisições concorrentes
+    }
+
+    /**
+     * CORREÇÃO #5: Busca em lote de ações/ETFs com fallback inteligente
+     * Tenta API primeiro (rápido), scraping só como último recurso
+     */
+    private Flux<PriceData> fetchStockPricesBatch(List<AssetToFetch> stocks) {
+        if (stocks.isEmpty()) return Flux.empty();
+
+        logger.info("📈 Buscando {} ações/ETFs (API primeiro, scraping como fallback)", stocks.size());
+
+        // Tenta buscar todos via API primeiro (MUITO mais rápido)
+        return Flux.fromIterable(stocks)
+                .flatMap(asset -> fetchStockPriceViaAPI(asset)
+                                .switchIfEmpty(Mono.defer(() -> {
+                                    logger.debug("⚠️ API falhou para {}, tentando scraping...", asset.ticker());
+                                    return fetchStockPriceViaScraping(asset);
+                                })),
+                        MAX_CONCURRENT_SCRAPING); // Limita scraping concorrente
+    }
+
+    /**
+     * CORREÇÃO #6: Novo método para buscar via API de chart (rápido e confiável)
+     */
+    private Mono<PriceData> fetchStockPriceViaAPI(AssetToFetch asset) {
+        return findCanonicalTicker(asset)
+                .flatMap(canonicalTicker -> {
+                    logger.debug("🔍 API: Buscando {} ({})", asset.ticker(), canonicalTicker);
+                    return webClient.get()
+                            .uri(uriBuilder -> uriBuilder
+                                    .path("/v8/finance/chart/" + canonicalTicker)
+                                    .queryParam("range", "1d")
+                                    .queryParam("interval", "1m")
+                                    .build())
+                            .retrieve()
+                            .bodyToMono(YahooChartResponseDto.class)
+                            .map(response -> extractCurrentPriceFromChart(response, asset.ticker()))
+                            .filter(Objects::nonNull);
+                })
+                .onErrorResume(e -> {
+                    logger.debug("❌ API falhou para {}: {}", asset.ticker(), e.getMessage());
+                    return Mono.empty();
+                });
+    }
+
+    /**
+     * CORREÇÃO #7: Scraping agora é o último recurso (paralelização controlada)
+     */
+    private Mono<PriceData> fetchStockPriceViaScraping(AssetToFetch asset) {
+        String tickerForUrl = asset.ticker();
+        if (asset.market() == Market.B3 && !tickerForUrl.contains(".")) {
+            tickerForUrl += ".SA";
+        }
+
+        String url = BASE_URL + tickerForUrl;
+
+        return Mono.fromCallable(() -> {
+                    logger.debug("🕷️ Scraping: {}", url);
+                    Document doc = Jsoup.connect(url)
+                            .userAgent(USER_AGENT)
+                            .header("Accept", "text/html,application/xhtml+xml,application/xml")
+                            .header("Accept-Language", "en-US,en;q=0.9")
+                            .timeout(5000) // Timeout de 5s
+                            .get();
+                    return extractPriceFromDocument(doc, asset.ticker());
+                })
+                .subscribeOn(Schedulers.boundedElastic())
+                .filter(Objects::nonNull)
+                .doOnError(error -> logger.warn("❌ Scraping falhou para {}: {}",
+                        asset.ticker(), error.getMessage()))
+                .onErrorResume(e -> Mono.empty());
+    }
+
+    /**
+     * Busca preço de criptomoeda APENAS via API (sem scraping que causa 404)
+     */
+    private Mono<PriceData> fetchCryptocurrencyPriceViaAPI(AssetToFetch asset) {
+        logger.debug("🪙 Buscando cripto via API: {}", asset.ticker());
+
+        return findCanonicalCryptoTicker(asset.ticker())
+                .flatMap(canonicalTicker -> {
+                    return webClient.get()
+                            .uri(uriBuilder -> uriBuilder
+                                    .path("/v8/finance/chart/" + canonicalTicker)
+                                    .queryParam("range", "1d")
+                                    .queryParam("interval", "1m")
+                                    .build())
+                            .retrieve()
+                            .bodyToMono(YahooChartResponseDto.class)
+                            .map(response -> extractCurrentPriceFromChart(response, asset.ticker()))
+                            .filter(Objects::nonNull);
+                })
+                .onErrorResume(e -> {
+                    logger.error("❌ Erro ao buscar cripto {}: {}", asset.ticker(), e.getMessage());
+                    return Mono.empty();
+                });
+    }
+
+    private Mono<String> findCanonicalCryptoTicker(String searchTerm) {
+        // Verifica cache primeiro
+        String cached = canonicalTickerCache.get(searchTerm);
+        if (cached != null) {
+            return Mono.just(cached);
+        }
+
+        return this.webClient.get()
+                .uri(uriBuilder -> uriBuilder.path("/v1/finance/search").queryParam("q", searchTerm).build())
+                .retrieve()
+                .bodyToMono(YahooSearchResponseDto.class)
+                .flatMap(response -> {
+                    if (response.quotes() == null || response.quotes().isEmpty()) {
+                        return Mono.empty();
+                    }
+
+                    Optional<String> cryptoTicker = response.quotes().stream()
+                            .filter(q -> "CRYPTOCURRENCY".equalsIgnoreCase(q.quoteType()))
+                            .findFirst()
+                            .map(YahooQuoteDto::symbol);
+
+                    if (cryptoTicker.isPresent()) {
+                        canonicalTickerCache.put(searchTerm, cryptoTicker.get());
+                        return Mono.just(cryptoTicker.get());
+                    }
+                    return Mono.empty();
+                })
+                .onErrorResume(e -> Mono.empty());
+    }
+
+    private PriceData extractCurrentPriceFromChart(YahooChartResponseDto response, String originalTicker) {
+        if (response == null || response.chart() == null || response.chart().result().isEmpty()) {
+            return null;
+        }
+
+        ChartDataDto data = response.chart().result().get(0);
+        if (data == null || data.indicators() == null || data.indicators().quote().isEmpty()) {
+            return null;
+        }
+
+        List<BigDecimal> prices = data.indicators().quote().get(0).close();
+        if (prices == null || prices.isEmpty()) {
+            return null;
+        }
+
+        BigDecimal currentPrice = null;
+        for (int i = prices.size() - 1; i >= 0; i--) {
+            if (prices.get(i) != null) {
+                currentPrice = prices.get(i);
+                break;
+            }
+        }
+
+        if (currentPrice != null) {
+            logger.debug("✅ Preço extraído via API para {}: {}", originalTicker, currentPrice);
+            return new PriceData(originalTicker, currentPrice);
+        }
+        return null;
     }
 
     @Override
@@ -186,8 +399,9 @@ public class WebScraperService implements MarketDataProvider {
                 .doOnSuccess(rate -> {
                     if (rate != null) {
                         this.usdToBrlRate = rate;
+                        logger.info("✅ Taxa USD/BRL carregada: {}", rate);
                     } else {
-                        logger.warn("Não foi possível obter a taxa de câmbio do Yahoo. Usando o valor anterior/padrão: {}", this.usdToBrlRate);
+                        logger.warn("⚠️ Usando taxa USD/BRL padrão: {}", this.usdToBrlRate);
                     }
                 })
                 .then();
@@ -215,7 +429,7 @@ public class WebScraperService implements MarketDataProvider {
                     return Flux.fromIterable(results);
                 })
                 .onErrorResume(e -> {
-                    logger.error("Erro na API de busca do Yahoo para o termo '{}': {}", term, e.getMessage());
+                    logger.error("Erro na busca para '{}': {}", term, e.getMessage());
                     return Flux.empty();
                 });
     }
@@ -247,215 +461,5 @@ public class WebScraperService implements MarketDataProvider {
         }
 
         return new AssetSearchResultDto(quote.symbol(), quote.shortname(), assetType, market);
-    }
-
-    private Mono<PriceData> fetchSingleStockPrice(AssetToFetch asset) {
-        // Redireciona para o método específico baseado no tipo de ativo
-        if (AssetType.CRYPTO.equals(asset.assetType())) {
-            return fetchCryptocurrencyPrice(asset);
-        } else {
-            return fetchStockOrEtfPrice(asset);
-        }
-    }
-
-    /**
-     * Método específico para buscar preços de ações e ETFs via scraping do Yahoo Finance
-     */
-    private Mono<PriceData> fetchStockOrEtfPrice(AssetToFetch asset) {
-        // Para nomes completos ou tickers muito longos, usa busca primeiro
-        if (asset.ticker().contains(" ") || asset.ticker().length() > 10) {
-            logger.info("Ticker '{}' parece ser nome completo. Usando busca para encontrar ticker correto.", asset.ticker());
-            return fetchStockPriceViaSearch(asset);
-        }
-
-        // Para casos simples (ações B3 e US com tickers conhecidos)
-        String tickerForApi = asset.ticker();
-        if (asset.market() == Market.B3 && !tickerForApi.contains(".")) {
-            tickerForApi += ".SA";
-        }
-
-        String url = BASE_URL + tickerForApi;
-
-        return Mono.fromCallable(() -> {
-                    logger.debug("Tentativa de scraping direto para Stock/ETF na URL: {}", url);
-                    Document doc = Jsoup.connect(url)
-                            .userAgent(USER_AGENT)
-                            .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9")
-                            .header("Accept-Language", "en-US,en;q=0.9")
-                            .get();
-
-                    return extractPriceFromDocument(doc, asset.ticker());
-                })
-                .subscribeOn(Schedulers.boundedElastic())
-                .filter(Objects::nonNull)
-                .doOnError(error -> logger.error("Erro na tentativa de busca direta para Stock/ETF {}: {}", asset.ticker(), error.getMessage()))
-                .onErrorResume(e -> {
-                    // Fallback para busca se o scraping direto falhar
-                    if (e instanceof org.jsoup.HttpStatusException hse && hse.getStatusCode() == 404) {
-                        logger.info("URL direta falhou com 404 para {}, tentando via busca...", asset.ticker());
-                        return fetchStockPriceViaSearch(asset);
-                    }
-                    return Mono.empty();
-                });
-    }
-
-    /**
-     * Método específico para buscar preços de criptomoedas usando exclusivamente APIs do Yahoo Finance
-     * Evita scraping que causa erro 404 para criptos
-     */
-    private Mono<PriceData> fetchCryptocurrencyPrice(AssetToFetch asset) {
-        logger.info("Buscando preço de criptomoeda para: {} via APIs do Yahoo Finance", asset.ticker());
-
-        // Primeiro tenta encontrar o ticker canônico via busca
-        return findCanonicalCryptoTicker(asset.ticker())
-                .flatMap(canonicalTicker -> {
-                    logger.info("Ticker canônico encontrado para crypto {}: {}", asset.ticker(), canonicalTicker);
-
-                    // Usa a API de chart para obter o preço atual (mais confiável que scraping)
-                    return webClient.get()
-                            .uri(uriBuilder -> uriBuilder
-                                    .path("/v8/finance/chart/" + canonicalTicker)
-                                    .queryParam("range", "1d")
-                                    .queryParam("interval", "1m")
-                                    .build())
-                            .retrieve()
-                            .bodyToMono(YahooChartResponseDto.class)
-                            .map(response -> extractCurrentPriceFromChart(response, asset.ticker()))
-                            .filter(Objects::nonNull)
-                            .filter(Objects::nonNull);
-                })
-                .onErrorResume(e -> {
-                    logger.error("Erro ao buscar preço da criptomoeda {} via API: {}", asset.ticker(), e.getMessage());
-                    return Mono.empty();
-                });
-    }
-
-    /**
-     * Busca específica para encontrar ticker canônico de criptomoedas
-     */
-    private Mono<String> findCanonicalCryptoTicker(String searchTerm) {
-        logger.info("Buscando ticker canônico para criptomoeda: '{}'", searchTerm);
-
-        return this.webClient.get()
-                .uri(uriBuilder -> uriBuilder.path("/v1/finance/search").queryParam("q", searchTerm).build())
-                .retrieve()
-                .bodyToMono(YahooSearchResponseDto.class)
-                .flatMap(response -> {
-                    if (response.quotes() == null || response.quotes().isEmpty()) {
-                        logger.warn("Nenhum resultado encontrado na busca do Yahoo para a criptomoeda: {}", searchTerm);
-                        return Mono.empty();
-                    }
-
-                    // Procura especificamente por criptomoedas
-                    Optional<String> cryptoTicker = response.quotes().stream()
-                            .filter(q -> "CRYPTOCURRENCY".equalsIgnoreCase(q.quoteType()))
-                            .findFirst()
-                            .map(YahooQuoteDto::symbol);
-
-                    if (cryptoTicker.isPresent()) {
-                        logger.info("Ticker canônico encontrado para crypto '{}': {}", searchTerm, cryptoTicker.get());
-                        return Mono.just(cryptoTicker.get());
-                    } else {
-                        logger.warn("Nenhuma criptomoeda encontrada na busca para: {}", searchTerm);
-                        return Mono.empty();
-                    }
-                })
-                .onErrorResume(e -> {
-                    logger.error("Erro na busca de ticker canônico para crypto '{}': {}", searchTerm, e.getMessage());
-                    return Mono.empty();
-                });
-    }
-
-    /**
-     * Extrai o preço atual dos dados do gráfico retornados pela API
-     */
-    private PriceData extractCurrentPriceFromChart(YahooChartResponseDto response, String originalTicker) {
-        if (response == null || response.chart() == null || response.chart().result().isEmpty()) {
-            logger.warn("Resposta da API de chart vazia ou inválida para {}", originalTicker);
-            return null;
-        }
-
-        ChartDataDto data = response.chart().result().get(0);
-        if (data == null || data.indicators() == null || data.indicators().quote().isEmpty()) {
-            logger.warn("Dados de indicadores ausentes na resposta da API de chart para {}", originalTicker);
-            return null;
-        }
-
-        List<BigDecimal> prices = data.indicators().quote().get(0).close();
-        if (prices == null || prices.isEmpty()) {
-            logger.warn("Lista de preços vazia na resposta da API de chart para {}", originalTicker);
-            return null;
-        }
-
-        // Pega o último preço disponível (mais recente)
-        BigDecimal currentPrice = null;
-        for (int i = prices.size() - 1; i >= 0; i--) {
-            if (prices.get(i) != null) {
-                currentPrice = prices.get(i);
-                break;
-            }
-        }
-
-        if (currentPrice != null) {
-            logger.info("Preço atual extraído da API de chart para {}: {}", originalTicker, currentPrice);
-            return new PriceData(originalTicker, currentPrice);
-        } else {
-            logger.warn("Não foi possível encontrar um preço válido nos dados de chart para {}", originalTicker);
-            return null;
-        }
-    }
-
-    /**
-     * Método para buscar preços de ações/ETFs via API de busca (fallback do scraping)
-     */
-    private Mono<PriceData> fetchStockPriceViaSearch(AssetToFetch originalAsset) {
-        final String searchTerm = originalAsset.ticker();
-        logger.info("Stock/ETF '{}' não encontrado diretamente. Tentando via API de busca...", searchTerm);
-
-        return this.webClient.get()
-                .uri(uriBuilder -> uriBuilder.path("/v1/finance/search").queryParam("q", searchTerm).build())
-                .retrieve()
-                .bodyToMono(YahooSearchResponseDto.class)
-                .flatMap(response -> {
-                    if (response.quotes() == null || response.quotes().isEmpty()) {
-                        logger.warn("Nenhum resultado encontrado na busca do Yahoo para o termo: {}", searchTerm);
-                        return Mono.empty();
-                    }
-
-                    // A busca retorna um Optional<YahooQuoteDto> (uma "caixa")
-                    Optional<YahooQuoteDto> bestMatch = response.quotes().stream()
-                            .filter(q -> "EQUITY".equalsIgnoreCase(q.quoteType()) || "ETF".equalsIgnoreCase(q.quoteType()))
-                            .findFirst()
-                            .or(() -> response.quotes().stream().findFirst());
-
-                    // 1. Verificamos se a caixa está vazia. Se estiver, paramos aqui.
-                    if (bestMatch.isEmpty()) {
-                        logger.warn("Nenhum resultado compatível (EQUITY/ETF) encontrado para '{}'", searchTerm);
-                        return Mono.empty();
-                    }
-
-                    // 2. Se a caixa não está vazia, pegamos o objeto de dentro dela.
-                    YahooQuoteDto foundQuote = bestMatch.get();
-
-                    AssetSearchResultDto searchResult = mapYahooQuoteToSearchResult(foundQuote);
-                    if (searchResult == null) return Mono.empty();
-
-                    logger.info("Busca via API encontrou o ticker: {} para o termo '{}'", searchResult.ticker(), searchTerm);
-
-                    AssetToFetch foundAsset = new AssetToFetch(
-                            searchResult.ticker(),
-                            searchResult.market(),
-                            searchResult.assetType()
-                    );
-
-                    String url = BASE_URL + foundAsset.ticker();
-                    return Mono.fromCallable(() -> {
-                                Document doc = Jsoup.connect(url).userAgent(USER_AGENT).get();
-                                return extractPriceFromDocument(doc, foundAsset.ticker());
-                            })
-                            .subscribeOn(Schedulers.boundedElastic())
-                            .filter(Objects::nonNull)
-                            .map(priceData -> new PriceData(originalAsset.ticker(), priceData.price())); // Retorna o preço na moeda original
-                });
     }
 }
