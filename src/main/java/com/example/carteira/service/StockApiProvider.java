@@ -87,9 +87,6 @@ public class StockApiProvider implements MarketDataProvider {
                 .onErrorResume(e -> Flux.empty());
     }
 
-    // BUG 4 CORRIGIDO: Método legado fetchStockPrices foi removido.
-
-    // BUG 6 & 7 CORRIGIDO: Agora retorna Mono<PriceData> e usa DTOs públicos.
     private Mono<PriceData> fetchSingleStockPrice(AssetToFetch asset) {
         String tickerForApi = (asset.market() == Market.B3) ? asset.ticker() + ".SA" : asset.ticker();
 

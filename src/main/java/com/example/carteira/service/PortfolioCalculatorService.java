@@ -11,7 +11,6 @@ import com.example.carteira.service.util.ExchangeRateService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.math.BigDecimal;
@@ -30,8 +29,6 @@ public class PortfolioCalculatorService {
     private final FixedIncomeService fixedIncomeService;
     private final ExchangeRateService exchangeRateService;
 
-    // =======================> CORREÇÃO APLICADA AQUI <=======================
-    // Adicionando a definição do record que estava faltando.
     private record PositionCalculationResult(BigDecimal quantity, BigDecimal totalInvested) {}
     private record AssetKey(String ticker, AssetType assetType, Market market) {}
     private record MarketDataKey(String ticker, LocalDate date) {}
@@ -58,6 +55,13 @@ public class PortfolioCalculatorService {
                 .filter(t -> t.getTicker() != null)
                 .collect(Collectors.groupingBy(t -> new AssetKey(t.getTicker(), t.getAssetType(), t.getMarket())));
 
+        List<AssetKey> assetsNeedingPrices = groupedTransactions.keySet().stream()
+                .collect(Collectors.toList());
+
+        if (calculationDate.isEqual(LocalDate.now())) {
+            preloadCurrentPricesInBatch(assetsNeedingPrices, priceCache);
+        }
+
         Stream<AssetPositionDto> transactionalAssetsStream = groupedTransactions.entrySet().stream()
                 .map(entry -> calculateSinglePosition(entry.getKey(), entry.getValue(), calculationDate, priceCache, exchangeRateCache))
                 .filter(Objects::nonNull);
@@ -69,6 +73,44 @@ public class PortfolioCalculatorService {
 
         return Stream.concat(transactionalAssetsStream, fixedIncomeAssetsStream)
                 .collect(Collectors.toList());
+    }
+
+    private void preloadCurrentPricesInBatch(List<AssetKey> assets, Map<MarketDataKey, Optional<BigDecimal>> priceCache) {
+        logger.info("🔄 Pré-carregando preços para {} ativos...", assets.size());
+
+        // Agrupa por tipo de ativo para busca eficiente
+        Map<AssetType, List<AssetKey>> byType = assets.stream()
+                .collect(Collectors.groupingBy(AssetKey::assetType));
+
+        byType.forEach((assetType, assetKeys) -> {
+            // Verifica quais ativos ainda não estão no cache do MarketDataService
+            List<AssetKey> uncachedAssets = assetKeys.stream()
+                    .filter(key -> marketDataService.getPrice(key.ticker()).compareTo(BigDecimal.ZERO) == 0)
+                    .collect(Collectors.toList());
+
+            if (!uncachedAssets.isEmpty()) {
+                logger.info("📥 Buscando {} ativos do tipo {} que não estão no cache",
+                        uncachedAssets.size(), assetType);
+
+                // Busca todos os ativos não cacheados de uma vez
+                List<AssetToFetch> toFetch = uncachedAssets.stream()
+                        .map(key -> new AssetToFetch(key.ticker(), key.market(), key.assetType()))
+                        .collect(Collectors.toList());
+
+                // Dispara a busca (o resultado será armazenado no cache do MarketDataService)
+                marketDataService.updatePricesForTransactions(
+                        toFetch.stream()
+                                .map(asset -> {
+                                    Transaction tx = new Transaction();
+                                    tx.setTicker(asset.ticker());
+                                    tx.setMarket(asset.market());
+                                    tx.setAssetType(asset.assetType());
+                                    return tx;
+                                })
+                                .collect(Collectors.toList())
+                );
+            }
+        });
     }
 
     private AssetPositionDto calculateSinglePosition(
@@ -85,7 +127,7 @@ public class PortfolioCalculatorService {
 
         Optional<BigDecimal> priceInOriginalCurrencyOpt = fetchAndCachePrice(key, calculationDate, priceCache);
 
-        BigDecimal priceInBRL = null;
+        BigDecimal priceInBRL;
         BigDecimal totalInvestedInBRL = initialPosition.totalInvested();
         BigDecimal averagePriceInBRL = totalInvestedInBRL.divide(initialPosition.quantity(), 8, RoundingMode.HALF_UP);
 
@@ -93,7 +135,10 @@ public class PortfolioCalculatorService {
             priceInBRL = applyCurrencyConversion(
                     priceInOriginalCurrencyOpt.get(), key, calculationDate, exchangeRateCache, true
             );
+        } else {
+            priceInBRL = null;
         }
+
         totalInvestedInBRL = applyCurrencyConversion(
                 initialPosition.totalInvested(), key, calculationDate, exchangeRateCache, false
         );
@@ -116,7 +161,7 @@ public class PortfolioCalculatorService {
 
         AssetPositionDto position = new AssetPositionDto();
         position.setTicker(key.ticker());
-        position.setName(null); // ou o nome correto se você o tiver
+        position.setName(null);
         position.setAssetType(key.assetType());
         position.setMarket(key.market());
         position.setTotalQuantity(initialPosition.quantity());
@@ -142,7 +187,7 @@ public class PortfolioCalculatorService {
                 if (t.getOtherCosts() != null) transactionCost = transactionCost.add(t.getOtherCosts());
                 totalInvestedValue = totalInvestedValue.add(transactionCost);
                 currentQuantity = currentQuantity.add(t.getQuantity());
-            } else { // SELL
+            } else {
                 if (currentQuantity.compareTo(BigDecimal.ZERO) > 0) {
                     BigDecimal avgPrice = totalInvestedValue.divide(currentQuantity, 16, RoundingMode.HALF_UP);
                     totalInvestedValue = totalInvestedValue.subtract(t.getQuantity().multiply(avgPrice));
@@ -157,15 +202,40 @@ public class PortfolioCalculatorService {
 
     private Optional<BigDecimal> fetchAndCachePrice(AssetKey key, LocalDate date, Map<MarketDataKey, Optional<BigDecimal>> priceCache) {
         MarketDataKey cacheKey = new MarketDataKey(key.ticker(), date);
+
         return priceCache.computeIfAbsent(cacheKey, k -> {
-            Mono<PriceData> priceMono = date.isEqual(LocalDate.now())
-                    ? getCurrentPriceWithFallback(new AssetToFetch(k.ticker(), key.market(), key.assetType()))
-                    : getHistoricalPriceWithFallback(new AssetToFetch(k.ticker(), key.market(), key.assetType()), k.date());
-            return priceMono.map(PriceData::price).map(Optional::of).defaultIfEmpty(Optional.empty()).block();
+            // CORREÇÃO: Se for data atual, tenta o cache do MarketDataService primeiro
+            if (date.isEqual(LocalDate.now())) {
+                BigDecimal cachedPrice = marketDataService.getPrice(k.ticker());
+                if (cachedPrice.compareTo(BigDecimal.ZERO) > 0) {
+                    logger.debug("💾 Usando preço do cache central para {}: {}", k.ticker(), cachedPrice);
+                    return Optional.of(cachedPrice);
+                }
+
+                // Se não está no cache, busca com fallback
+                logger.debug("🔍 Preço não encontrado no cache para {}, buscando...", k.ticker());
+                Mono<PriceData> priceMono = getCurrentPriceWithFallback(
+                        new AssetToFetch(k.ticker(), key.market(), key.assetType())
+                );
+                return priceMono.map(PriceData::price).map(Optional::of).defaultIfEmpty(Optional.empty()).block();
+            } else {
+                // Para datas históricas, sempre busca
+                Mono<PriceData> priceMono = getHistoricalPriceWithFallback(
+                        new AssetToFetch(k.ticker(), key.market(), key.assetType()),
+                        k.date()
+                );
+                return priceMono.map(PriceData::price).map(Optional::of).defaultIfEmpty(Optional.empty()).block();
+            }
         });
     }
 
-    private BigDecimal applyCurrencyConversion(BigDecimal valueToConvert, AssetKey key, LocalDate date, Map<LocalDate, Optional<BigDecimal>> exchangeRateCache, boolean isPrice) {
+    private BigDecimal applyCurrencyConversion(
+            BigDecimal valueToConvert,
+            AssetKey key,
+            LocalDate date,
+            Map<LocalDate, Optional<BigDecimal>> exchangeRateCache,
+            boolean isPrice) {
+
         boolean needsConversion = isPrice
                 ? (AssetType.CRYPTO.equals(key.assetType()) || Market.US.equals(key.market()))
                 : Market.US.equals(key.market());
@@ -174,16 +244,20 @@ public class PortfolioCalculatorService {
             return valueToConvert;
         }
 
-        BigDecimal usdToBrlRate = exchangeRateCache.computeIfAbsent(date, k ->
-                (date.isEqual(LocalDate.now()) ? exchangeRateService.fetchUsdToBrlRate() : exchangeRateService.fetchHistoricalUsdToBrlRate(k))
-                        .map(Optional::of).defaultIfEmpty(Optional.empty()).block()
-        ).orElse(null);
+        BigDecimal usdToBrlRate = exchangeRateCache.computeIfAbsent(date, k -> {
+            logger.debug("💱 Buscando taxa de câmbio para {}", k);
+            Mono<BigDecimal> rateMono = date.isEqual(LocalDate.now())
+                    ? exchangeRateService.fetchUsdToBrlRate()
+                    : exchangeRateService.fetchHistoricalUsdToBrlRate(k);
+            return rateMono.map(Optional::of).defaultIfEmpty(Optional.empty()).block();
+        }).orElse(null);
 
         if (usdToBrlRate != null) {
             return valueToConvert.multiply(usdToBrlRate);
         }
 
-        logger.warn("Taxa de câmbio não encontrada para {}. Não foi possível converter o valor do ativo {}", date, key.ticker());
+        logger.warn("⚠️ Taxa de câmbio não encontrada para {}. Não foi possível converter o valor do ativo {}",
+                date, key.ticker());
         return valueToConvert;
     }
 
@@ -193,25 +267,10 @@ public class PortfolioCalculatorService {
             logger.warn("[Atual] Nenhum provedor encontrado para o tipo de ativo: {}", asset.assetType());
             return Mono.empty();
         }
-        return Flux.fromIterable(availableProviders)
-                .concatMap(provider -> {
-                    logger.info("[Atual] Tentando provedor '{}' para {}", provider.getClass().getSimpleName(), asset.ticker());
-                    return provider.fetchPrices(List.of(asset));
-                })
-                .next();
+        return marketDataService.getPriceWithFallback(asset);
     }
 
     private Mono<PriceData> getHistoricalPriceWithFallback(AssetToFetch asset, LocalDate date) {
-        List<MarketDataProvider> availableProviders = marketDataService.findProvidersFor(asset.assetType());
-        if (availableProviders.isEmpty()) {
-            logger.warn("[Histórico] Nenhum provedor encontrado para o tipo de ativo: {}", asset.assetType());
-            return Mono.empty();
-        }
-        return Flux.fromIterable(availableProviders)
-                .concatMap(provider -> {
-                    logger.info("[Histórico] Tentando provedor '{}' para {} em {}", provider.getClass().getSimpleName(), asset.ticker(), date);
-                    return provider.fetchHistoricalPrice(asset, date);
-                })
-                .next();
+        return marketDataService.getHistoricalPriceWithFallback(asset, date);
     }
 }
