@@ -42,7 +42,7 @@ import java.util.stream.Collectors;
 public class WebScraperService implements MarketDataProvider {
     private static final Logger logger = LoggerFactory.getLogger(WebScraperService.class);
     private static final String BASE_URL = "https://finance.yahoo.com/quote/";
-    private static final int MAX_CONCURRENT_SCRAPING = 5; // Limita scraping concorrente
+    private static final int MAX_CONCURRENT_SCRAPING = 20; // Limita scraping concorrente
 
     private final ExchangeRateService exchangeRateService;
     private BigDecimal usdToBrlRate = BigDecimal.ONE;

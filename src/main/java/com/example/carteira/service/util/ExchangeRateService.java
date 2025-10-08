@@ -23,7 +23,7 @@ import java.util.List;
 import java.util.Objects;
 
 @Service
-public class ExchangeRateService {
+public class    ExchangeRateService {
 
     private static final Logger logger = LoggerFactory.getLogger(ExchangeRateService.class);
     private static final String EXCHANGE_RATE_URL = "https://finance.yahoo.com/quote/USDBRL=X/";
@@ -72,7 +72,7 @@ public class ExchangeRateService {
      * Busca a taxa de câmbio histórica USD -> BRL para uma data específica.
      */
     public Mono<BigDecimal> fetchHistoricalUsdToBrlRate(LocalDate date) {
-        logger.info("Buscando taxa de câmbio histórica para a data {}", date);
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        logger.info("Buscando taxa de câmbio histórica para a data {}", date);
         final String ticker = "USDBRL=X";
 
         return yahooChartWebClient.get()
