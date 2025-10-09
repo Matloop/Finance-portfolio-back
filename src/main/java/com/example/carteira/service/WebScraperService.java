@@ -23,10 +23,12 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 /**
@@ -50,8 +52,8 @@ public class WebScraperService implements MarketDataProvider {
             " (KHTML, like Gecko) Chrome/94.0.4606.81 Safari/537.36";
     private final WebClient webClient;
 
-    // CORREÇÃO #1: Cache de tickers canônicos para evitar buscas repetidas
-    private final Map<String, String> canonicalTickerCache = new HashMap<>();
+    private final Map<String, BigDecimal> historicalPriceCache = new ConcurrentHashMap<>();
+    private final Map<String, String> canonicalTickerCache = new ConcurrentHashMap<>();
 
     public WebScraperService(ExchangeRateService exchangeRateService, WebClient.Builder webClientBuilder) {
         this.exchangeRateService = exchangeRateService;
@@ -87,6 +89,13 @@ public class WebScraperService implements MarketDataProvider {
 
     @Override
     public Mono<PriceData> fetchHistoricalPrice(AssetToFetch asset, LocalDate date) {
+        final String assetTicker = asset.ticker().toUpperCase();
+        final String cacheKey = assetTicker + "_" + date.toString();
+        BigDecimal cachedPrice = historicalPriceCache.get(cacheKey);
+        if (cachedPrice != null) {
+            logger.debug("💾 [Histórico Cache] Preço para {} em {} recuperado do cache: {}", assetTicker, date, cachedPrice);
+            return Mono.just(new PriceData(assetTicker, cachedPrice));
+        }
         return findCanonicalTicker(asset)
                 .flatMap(canonicalTicker -> {
                     logger.info("Buscando preço histórico para {} ({}) na data {}",
@@ -102,6 +111,10 @@ public class WebScraperService implements MarketDataProvider {
                             .map(response -> extractHistoricalPriceFromChart(response, asset.ticker(), date));
                 })
                 .filter(Objects::nonNull)
+                .doOnNext(priceData -> {
+                    historicalPriceCache.put(cacheKey, priceData.price());
+                    logger.debug("✅ [Histórico Cache] Preço para {} em {} adicionado ao cache.", assetTicker, date);
+                })
                 .onErrorResume(e -> {
                     logger.error("Erro ao buscar preço histórico para {}: {}", asset.ticker(), e.getMessage());
                     return Mono.empty();
@@ -297,9 +310,10 @@ public class WebScraperService implements MarketDataProvider {
                     return extractPriceFromDocument(doc, asset.ticker());
                 })
                 .subscribeOn(Schedulers.boundedElastic())
-                .filter(Objects::nonNull)
+                .timeout(Duration.ofSeconds(5))
                 .doOnError(error -> logger.warn("❌ Scraping falhou para {}: {}",
                         asset.ticker(), error.getMessage()))
+                .filter(Objects::nonNull)
                 .onErrorResume(e -> Mono.empty());
     }
 

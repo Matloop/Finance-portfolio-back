@@ -20,7 +20,9 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class    ExchangeRateService {
@@ -28,7 +30,7 @@ public class    ExchangeRateService {
     private static final Logger logger = LoggerFactory.getLogger(ExchangeRateService.class);
     private static final String EXCHANGE_RATE_URL = "https://finance.yahoo.com/quote/USDBRL=X/";
     private static final String USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/94.0.4606.81 Safari/537.36";
-
+    private final Map<LocalDate, BigDecimal> historicalUsdBrlRateCache = new ConcurrentHashMap<>();
     // --- CORREÇÃO: Declarar o WebClient para a API do Yahoo ---
     private final WebClient yahooChartWebClient;
 
@@ -72,7 +74,11 @@ public class    ExchangeRateService {
      * Busca a taxa de câmbio histórica USD -> BRL para uma data específica.
      */
     public Mono<BigDecimal> fetchHistoricalUsdToBrlRate(LocalDate date) {
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        logger.info("Buscando taxa de câmbio histórica para a data {}", date);
+        if (historicalUsdBrlRateCache.containsKey(date)) {
+            logger.debug("💾 [Câmbio Histórico Cache] Usando preço de câmbio de: {}", date);
+            return Mono.just(historicalUsdBrlRateCache.get(date));
+        }
+        logger.info("Buscando taxa de c�mbio hist�rica para a data {}", date);
         final String ticker = "USDBRL=X";
 
         return yahooChartWebClient.get()
@@ -107,6 +113,10 @@ public class    ExchangeRateService {
                     return null;
                 })
                 .filter(Objects::nonNull)
+                .doOnNext(rate -> {
+                    historicalUsdBrlRateCache.put(date, rate);
+                    logger.debug("✅ [Câmbio Histórico Cache] Taxa para {} adicionada ao cache: {}", date, rate);
+                })
                 .onErrorResume(e -> {
                     logger.error("Erro ao buscar dados históricos da taxa de câmbio: {}", e.getMessage());
                     return Mono.empty();
