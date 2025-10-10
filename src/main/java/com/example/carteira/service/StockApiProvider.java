@@ -20,7 +20,7 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.Objects;
 
-// BUG 1 CORRIGIDO: Adicionado @Service
+
 @Service
 public class StockApiProvider implements MarketDataProvider {
     private static final Logger logger = LoggerFactory.getLogger(StockApiProvider.class);

@@ -33,10 +33,12 @@ public class Transaction {
     private AssetType assetType;
     private BigDecimal otherCosts;
 
+    //@Enumerated(EnumType.STRING) salvaria o enum no banco como 0-buy 1-sell
+    //salva como está ali, como uma string normal
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private TransactionType transactionType;
-
+    //precision valor máximo de digitos e scale maximo de digitos apos a virgula
     @Column(nullable = false, precision = 19, scale = 8)
     private BigDecimal quantity;
 

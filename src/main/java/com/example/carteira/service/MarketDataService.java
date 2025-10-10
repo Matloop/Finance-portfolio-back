@@ -24,13 +24,6 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
-/**
- * CORREÇÕES APLICADAS:
- * 1. Scheduler movido para dentro do doOnSuccess (Bug #1)
- * 2. Adicionado método getCachedPrice para uso pelo PortfolioCalculatorService
- * 3. Implementado batch fetching por tipo de ativo
- * 4. Adicionado PreDestroy para shutdown gracioso
- */
 @Service
 public class MarketDataService {
 

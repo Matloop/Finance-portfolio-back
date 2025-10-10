@@ -20,7 +20,7 @@ public class FixedIncomeAsset {
     @Column(nullable = false)
     private String name;
 
-    @Column(nullable = false, precision = 19, scale = 2)
+    @Column(nullable = false, precision = 19, scale = 5)
     private BigDecimal investedAmount;
 
     @Column(nullable = false)

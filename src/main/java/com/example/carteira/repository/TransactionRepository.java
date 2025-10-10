@@ -10,10 +10,8 @@ import java.util.List;
 @Repository
 public interface TransactionRepository extends JpaRepository<Transaction, Long> {
     List<Transaction> findByTickerOrderByTransactionDateAsc(String ticker);
-
     @Query("SELECT DISTINCT t.ticker, t.market FROM Transaction t")
     List<String> findDistinctTickers();
-
     void deleteByTicker(String ticker);
 
 }
