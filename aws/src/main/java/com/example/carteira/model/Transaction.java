@@ -1,0 +1,50 @@
+package com.example.carteira.model;
+
+import com.example.carteira.model.enums.AssetType;
+import com.example.carteira.model.enums.Market;
+import com.example.carteira.model.enums.TransactionType;
+import jakarta.persistence.*;
+import lombok.AllArgsConstructor;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+
+import java.math.BigDecimal;
+import java.time.LocalDate;
+
+@Entity
+@Getter
+@Setter
+@AllArgsConstructor
+@NoArgsConstructor
+public class Transaction {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(nullable = false)
+    private String ticker; // Ex: "PETR4", "BTC"
+    @Enumerated(EnumType.STRING)
+    private Market market;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private AssetType assetType;
+    private BigDecimal otherCosts;
+
+    //@Enumerated(EnumType.STRING) salvaria o enum no banco como 0-buy 1-sell
+    //salva como está ali, como uma string normal
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private TransactionType transactionType;
+    //precision valor máximo de digitos e scale maximo de digitos apos a virgula
+    @Column(nullable = false, precision = 19, scale = 8)
+    private BigDecimal quantity;
+
+    @Column(nullable = false, precision = 19, scale = 4)
+    private BigDecimal pricePerUnit;
+
+    @Column(nullable = false)
+    private LocalDate transactionDate;
+}
