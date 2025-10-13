@@ -37,4 +37,8 @@ public class FixedIncomeAsset {
 
     @Column(nullable = false, precision = 19, scale = 4)
     private BigDecimal contractedRate;
+
+    @ManyToOne(fetch = FetchType.LAZY) // LAZY é mais performático
+    @JoinColumn(name = "user_id", nullable = false)
+    private User user;
 }

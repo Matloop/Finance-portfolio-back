@@ -1,13 +1,16 @@
                                                                                                                                                                                 package com.example.carteira.service;
                                                                                                                                                                                 
                                                                                                                                                                                 import com.example.carteira.model.FixedIncomeAsset;
+                                                                                                                                                                                import com.example.carteira.model.User;
                                                                                                                                                                                 import com.example.carteira.model.dtos.AssetPositionDto;
                                                                                                                                                                                 import com.example.carteira.model.dtos.CreateFixedIncomeDto;
                                                                                                                                                                                 import com.example.carteira.repository.FixedIncomeRepository;
                                                                                                                                                                                 import com.example.carteira.service.util.BusinessDayService;
                                                                                                                                                                                 import com.example.carteira.service.util.IncomeTaxService;
+                                                                                                                                                                                import org.springframework.http.HttpStatus;
                                                                                                                                                                                 import org.springframework.stereotype.Service;
-                                                                                                                                                                                
+                                                                                                                                                                                import org.springframework.web.server.ResponseStatusException;
+
                                                                                                                                                                                 import java.math.BigDecimal;
                                                                                                                                                                                 import java.math.RoundingMode;
                                                                                                                                                                                 import java.time.LocalDate;
@@ -39,10 +42,11 @@
                                                                                                                                                                                                 .collect(Collectors.toList());
                                                                                                                                                                                     }
                                                                                                                                                                                 
-                                                                                                                                                                                    public FixedIncomeAsset addFixedIncome(CreateFixedIncomeDto dto) {
+                                                                                                                                                                                    public FixedIncomeAsset addFixedIncome(CreateFixedIncomeDto dto, User user) {
                                                                                                                                                                                         FixedIncomeAsset asset = new FixedIncomeAsset();
                                                                                                                                                                                 
                                                                                                                                                                                         asset.setName(dto.getName());
+                                                                                                                                                                                        asset.setUser(user);
                                                                                                                                                                                         asset.setInvestedAmount(dto.getInvestedAmount());
                                                                                                                                                                                         asset.setInvestmentDate(dto.getInvestmentDate());
                                                                                                                                                                                         asset.setDailyLiquid(dto.isDailyLiquid());
@@ -70,7 +74,8 @@
                                                                                                                                                                                     }
                                                                                                                                                                                 
                                                                                                                                                                                 
-                                                                                                                                                                                    public void deleteFixedIncome(Long id) {
+                                                                                                                                                                                    public void deleteFixedIncome(Long id, User user) {
+                                                                                                                                                                                        FixedIncomeAsset asset = fixedIncomeRepository.findByIdAndUser(id,user).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Ativo não encontrado"));
                                                                                                                                                                                         fixedIncomeRepository.deleteById(id);
                                                                                                                                                                                     }
                                                                                                                                                                                 

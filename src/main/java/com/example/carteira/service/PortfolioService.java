@@ -2,6 +2,7 @@ package com.example.carteira.service;
 
 import com.example.carteira.model.FixedIncomeAsset;
 import com.example.carteira.model.Transaction;
+import com.example.carteira.model.User;
 import com.example.carteira.model.dtos.*;
 import com.example.carteira.model.enums.AssetType;
 import com.example.carteira.model.enums.Market;
@@ -69,10 +70,10 @@ public class PortfolioService {
         return filteredStream.collect(Collectors.toList());
     }
 
-    public PortfolioDashboardDto getPortfolioDashboardData() {
+    public PortfolioDashboardDto getPortfolioDashboardData(User user) {
         LocalDate today = LocalDate.now();
         LocalDate twelveMonthsAgo = today.minusMonths(12);
-        List<Transaction> allTransactions = transactionRepository.findAll();
+        List<Transaction> allTransactions = transactionRepository.findByUser(user);
 
         List<AssetPositionDto> allCurrentAssets = calculatorService.calculateConsolidatedPortfolio(allTransactions, today);
 
@@ -110,9 +111,9 @@ public class PortfolioService {
         return new PortfolioDashboardDto(summary, percentages, assetsGrouped);
     }
 
-    public PortfolioEvolutionDto getPortfolioEvolutionData(String category, String assetType, String ticker) {
+    public PortfolioEvolutionDto getPortfolioEvolutionData(User user, String category, String assetType, String ticker) {
         LocalDate today = LocalDate.now();
-        List<Transaction> allTransactions = transactionRepository.findAll();
+        List<Transaction> allTransactions = transactionRepository.findByUser(user);
 
         // 1. RESPONSABILIDADE ÚNICA: Obter a lista de transações já filtrada.
         List<Transaction> filteredTransactions = getFilteredTransactions(allTransactions, category, assetType, ticker);
@@ -147,7 +148,7 @@ public class PortfolioService {
     }
 
     public PortfolioEvolutionDto getPortfolioEvolutionData() {
-        return getPortfolioEvolutionData(null, null,null);
+        return getPortfolioEvolutionData(null,null, null,null);
     }
 
     private PortfolioEvolutionPointDto calculatePortfolioSnapshot(List<Transaction> allTransactions, LocalDate date) {
@@ -168,9 +169,9 @@ public class PortfolioService {
         );
     }
 
-    public List<InvestedDetailDto> getInvestedValueDetails() {
+    public List<InvestedDetailDto> getInvestedValueDetails(User user) {
         // 1. Busca todas as transações
-        List<Transaction> allTransactions = transactionRepository.findAll();
+        List<Transaction> allTransactions = transactionRepository.findByUser(user);
 
         // 2. Calcula a posição atual de todos os ativos
         List<AssetPositionDto> allCurrentAssets = calculatorService.calculateConsolidatedPortfolio(allTransactions, LocalDate.now());
@@ -185,25 +186,26 @@ public class PortfolioService {
                 .collect(Collectors.toList());
     }
 
-    public List<Transaction> getTransactionsForAsset(String identifier, AssetType assetType) {
+    public List<Transaction> getTransactionsForAsset(User user, String identifier, AssetType assetType) {
         if (assetType == AssetType.FIXED_INCOME) {
             // Se for Renda Fixa, busca no repositório de Renda Fixa
-            return fixedIncomeRepository.findByName(identifier)
+            return fixedIncomeRepository.findByNameAndUser(identifier,user)
                     .map(this::convertFixedIncomeToTransaction) // Converte o resultado para uma transação
                     .map(Collections::singletonList) // Coloca em uma lista
                     .orElse(Collections.emptyList()); // Retorna lista vazia se não encontrar
         } else {
             // Para outros ativos (Ações, Criptos, ETFs), busca no repositório de transações
-            return transactionRepository.findByTickerOrderByTransactionDateAsc(identifier);
+            return transactionRepository.findByTickerAndUserOrderByTransactionDateAsc(identifier,user);
         }
     }
 
     @Transactional
-    public void deleteAsset(String identifier, AssetType assetType) {
+    public void deleteAsset(User user, String identifier, AssetType assetType) {
         if (assetType == AssetType.FIXED_INCOME) {
-            fixedIncomeRepository.deleteByName(identifier);
+
+            fixedIncomeRepository.deleteByNameAndUser(identifier,user);
         } else {
-            transactionRepository.deleteByTicker(identifier);
+            transactionRepository.deleteByTickerAndUser(identifier,user);
         }
     }
 

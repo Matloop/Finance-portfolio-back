@@ -53,6 +53,7 @@ public class SecurityConfig {
                 .authorizeHttpRequests(authorize -> authorize
                         // Permite o acesso aos endpoints de login/erro do Spring OAuth2
                         .requestMatchers("/oauth2/**", "/login/**", "/error").permitAll()
+                        .requestMatchers("/api/market-data/search/**").permitAll()
                         // Protege todas as outras rotas /api
                         .requestMatchers("/api/**").authenticated()
                         // Permite qualquer outra requisição

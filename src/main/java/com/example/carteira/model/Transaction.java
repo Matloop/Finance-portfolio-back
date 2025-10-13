@@ -47,4 +47,8 @@ public class Transaction {
 
     @Column(nullable = false)
     private LocalDate transactionDate;
+
+    @ManyToOne(fetch = FetchType.LAZY) // LAZY é mais performático
+    @JoinColumn(name = "user_id", nullable = false)
+    private User user;
 }
