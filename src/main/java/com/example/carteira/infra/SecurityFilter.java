@@ -41,6 +41,13 @@ public class SecurityFilter extends OncePerRequestFilter {
         filterChain.doFilter(request, response);
     }
 
+    @Override
+    protected boolean shouldNotFilter(HttpServletRequest request) throws ServletException {
+        String path = request.getRequestURI();
+        // O filtro NÃO deve ser executado para as rotas de login do OAuth2.
+        return path.startsWith("/login") || path.startsWith("/oauth2");
+    }
+
     private String recoverToken(HttpServletRequest request) {
         var authHeader = request.getHeader("Authorization");
         if (authHeader == null) return null;

@@ -19,13 +19,13 @@ RUN mvn clean package -DskipTests
 # Ela é baseada no Amazon Linux, que é otimizado para a AWS (e funciona perfeitamente no Render).
 FROM public.ecr.aws/amazoncorretto/amazoncorretto:17
 
-# Define o diretório de trabalho.
+# Define o diretório de trabalho
 WORKDIR /app
 
 # Copia o arquivo .jar que foi gerado no Estágio 1 para dentro da imagem final.
 COPY --from=build /app/target/*.jar app.jar
 
-# Expõe a porta 8080.
+# Expõe a porta 80.
 EXPOSE 8080
 
 # O comando que será executado quando o contêiner iniciar.
