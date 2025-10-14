@@ -52,7 +52,7 @@ public class MarketDataService {
                     logger.info("✅ Todos os provedores foram inicializados com sucesso!");
                     logger.info("📅 A primeira busca de dados de preços ocorrerá em 10 segundos.");
 
-                    // CORREÇÃO: Agendador só inicia APÓS inicialização completa
+                    // Agendador só inicia APÓS inicialização completa
                     scheduler.scheduleAtFixedRate(
                             this::refreshAllMarketData,
                             10,

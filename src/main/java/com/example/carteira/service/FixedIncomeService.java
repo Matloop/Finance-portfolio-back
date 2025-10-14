@@ -80,7 +80,6 @@
                                                                                                                                                                                     }
                                                                                                                                                                                 
                                                                                                                                                                                     private AssetPositionDto calculatePosition(FixedIncomeAsset asset) {
-                                                                                                                                                                                        // Esta linha agora funciona porque a assinatura de calculateGrossValue foi corrigida.
                                                                                                                                                                                         BigDecimal grossValue = calculateGrossValue(asset);
                                                                                                                                                                                         BigDecimal grossProfit = grossValue.subtract(asset.getInvestedAmount());
                                                                                                                                                                                 
@@ -108,7 +107,6 @@
                                                                                                                                                                                         return dto;
                                                                                                                                                                                     }
 
-                                                                                                                                                                                    // O parâmetro agora é a entidade correta: FixedIncomeAsset
                                                                                                                                                                                     private BigDecimal calculateGrossValue(FixedIncomeAsset asset) {
                                                                                                                                                                                         LocalDate startDate = asset.getInvestmentDate();
                                                                                                                                                                                         LocalDate endDate = LocalDate.now();
@@ -154,21 +152,14 @@
                                                                                                                                                                                                 .map(AssetPositionDto::getCurrentValue)
                                                                                                                                                                                                 .reduce(BigDecimal.ZERO, BigDecimal::add);
                                                                                                                                                                                     }
-                                                                                                                                                                                
-                                                                                                                                                                                    /**
-                                                                                                                                                                                     * Retorna as posições de renda fixa calculadas para uma data específica.
-                                                                                                                                                                                     * Útil para construir gráficos de evolução patrimonial.
-                                                                                                                                                                                     */
+
                                                                                                                                                                                     public List<AssetPositionDto> getAllFixedIncomePositionsForDate(LocalDate calculationDate) {
                                                                                                                                                                                         return fixedIncomeRepository.findAll().stream()
                                                                                                                                                                                                 .filter(asset -> !asset.getInvestmentDate().isAfter(calculationDate))
                                                                                                                                                                                                 .map(asset -> calculatePositionForDate(asset, calculationDate))
                                                                                                                                                                                                 .collect(Collectors.toList());
                                                                                                                                                                                     }
-                                                                                                                                                                                
-                                                                                                                                                                                    /**
-                                                                                                                                                                                     * Calcula a posição de um ativo de renda fixa em uma data específica.
-                                                                                                                                                                                     */
+
                                                                                                                                                                                     private AssetPositionDto calculatePositionForDate(FixedIncomeAsset asset, LocalDate calculationDate) {
                                                                                                                                                                                         // Se a data de cálculo for anterior ao investimento, retorna null
                                                                                                                                                                                         if (calculationDate.isBefore(asset.getInvestmentDate())) {
@@ -211,10 +202,7 @@
                                                                                                                                                                                         dto.setProfitability(profitability.setScale(2, RoundingMode.HALF_UP));
                                                                                                                                                                                         return dto;
                                                                                                                                                                                     }
-                                                                                                                                                                                
-                                                                                                                                                                                    /**
-                                                                                                                                                                                     * Calcula o valor bruto do ativo até uma data específica.
-                                                                                                                                                                                     */
+
                                                                                                                                                                                     private BigDecimal calculateGrossValueForDate(FixedIncomeAsset asset, LocalDate endDate) {
                                                                                                                                                                                         LocalDate startDate = asset.getInvestmentDate();
                                                                                                                                                                                         if (!endDate.isAfter(startDate)) {
