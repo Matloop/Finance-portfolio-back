@@ -1,3 +1,4 @@
+/*
 package com.example.carteira.service;
 
 import com.example.carteira.model.dtos.*; // <-- IMPORTANDO TODOS OS DTOS
@@ -148,3 +149,5 @@ public class StockApiProvider implements MarketDataProvider {
                 .then();
     }
 }
+
+ */
