@@ -2,6 +2,7 @@ package com.example.carteira.service;
 
 import com.example.carteira.model.FixedIncomeAsset;
 import com.example.carteira.model.Transaction;
+import com.example.carteira.model.User;
 import com.example.carteira.model.dtos.ImportSummaryDto;
 import com.example.carteira.model.enums.AssetType;
 import com.example.carteira.model.enums.FixedIncomeIndex;
@@ -37,7 +38,7 @@ public class CsvService {
      * Exporta transações e renda fixa para CSV.
      * Formato: Data,Ticker,Tipo,Quantidade,PrecoUnitario,Custos,TipoAtivo,Mercado,LiquidezDiaria,Vencimento,Indexador,Taxa
      */
-    public String exportAllToCsv() {
+    public String exportAllToCsv(User user) {
         StringWriter sw = new StringWriter();
 
         String[] headers = new String[]{
@@ -48,7 +49,7 @@ public class CsvService {
         try (CSVPrinter csvPrinter = new CSVPrinter(sw, CSVFormat.DEFAULT.withHeader(headers))) {
 
             // Exporta transações normais
-            List<Transaction> transactions = transactionRepository.findAll();
+            List<Transaction> transactions = transactionRepository.findByUser(user);
             for (Transaction tx : transactions) {
                 csvPrinter.printRecord(
                         tx.getTransactionDate(),
@@ -92,8 +93,8 @@ public class CsvService {
     /**
      * Mantém compatibilidade com o método antigo (só transações)
      */
-    public String exportTransactionsToCsv() {
-        return exportAllToCsv();
+    public String exportTransactionsToCsv(User user) {
+        return exportAllToCsv(user);
     }
 
     /**
