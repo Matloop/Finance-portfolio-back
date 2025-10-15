@@ -5,5 +5,6 @@ public enum AssetType {
     STOCK,
     ETF,
     CRYPTO,
-    FIXED_INCOME;
+    FIXED_INCOME,
+    FUND
 }
