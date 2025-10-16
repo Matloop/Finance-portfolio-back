@@ -1,5 +1,6 @@
 package com.example.carteira.model.dtos;
 
+import com.example.carteira.model.enums.AssetType;
 import com.example.carteira.model.enums.FixedIncomeIndex;
 import jakarta.validation.constraints.Future;
 import jakarta.validation.constraints.NotBlank;
@@ -30,6 +31,8 @@ public class CreateFixedIncomeDto {
     @NotNull(message = "A data de vencimento não pode ser nula.")
     @Future(message = "A data de vencimento deve ser no futuro.")
     private LocalDate maturityDate;
+    @NotNull(message = "O tipo de ativo não pode ser nulo")
+    private AssetType assetType;
 
     @NotNull(message = "O tipo de indexador não pode ser nulo.")
     private FixedIncomeIndex indexType;

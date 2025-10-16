@@ -4,10 +4,7 @@ import com.example.carteira.model.FixedIncomeAsset;
 import com.example.carteira.model.Transaction;
 import com.example.carteira.model.User;
 import com.example.carteira.model.dtos.ImportSummaryDto;
-import com.example.carteira.model.enums.AssetType;
-import com.example.carteira.model.enums.FixedIncomeIndex;
-import com.example.carteira.model.enums.Market;
-import com.example.carteira.model.enums.TransactionType;
+import com.example.carteira.model.enums.*;
 import com.example.carteira.repository.FixedIncomeRepository;
 import com.example.carteira.repository.TransactionRepository;
 import org.apache.commons.csv.CSVFormat;
@@ -112,7 +109,7 @@ public class CsvService {
 
         CSVFormat csvFormat = CSVFormat.DEFAULT.builder()
                 .setHeader("Data", "Ticker", "Tipo", "Quantidade", "PrecoUnitario", "Custos",
-                        "TipoAtivo", "Mercado", "LiquidezDiaria", "Vencimento", "Indexador", "Taxa")
+                        "TipoAtivo", "CategoriaAtivo", "Mercado", "LiquidezDiaria", "Vencimento", "Indexador", "Taxa")
                 .setSkipHeaderRecord(true)
                 .build();
 
@@ -121,10 +118,10 @@ public class CsvService {
 
             for (CSVRecord record : csvParser) {
                 try {
-                    String assetTypeStr = record.get("TipoAtivo").toUpperCase();
-                    AssetType assetType = AssetType.valueOf(assetTypeStr);
+                    String assetCategoryStr = record.get("TipoAtivo").toUpperCase();
+                    AssetCategory assetCategory = AssetCategory.valueOf(assetCategoryStr);
 
-                    if (assetType == AssetType.FIXED_INCOME) {
+                    if (assetCategory == AssetCategory.FIXED_INCOME) {
                         // Processa renda fixa
                         FixedIncomeAsset fixedIncome = parseFixedIncomeFromRecord(record);
                         validFixedIncome.add(fixedIncome);
@@ -171,6 +168,7 @@ public class CsvService {
         transaction.setTicker(record.get("Ticker").toUpperCase());
         transaction.setTransactionType(TransactionType.valueOf(record.get("Tipo").toUpperCase()));
         transaction.setAssetType(AssetType.valueOf(record.get("TipoAtivo").toUpperCase()));
+        transaction.setMarket(Market.valueOf(record.get("CategoriaAtivo").toUpperCase()));
         transaction.setQuantity(new BigDecimal(record.get("Quantidade")));
         transaction.setPricePerUnit(new BigDecimal(record.get("PrecoUnitario")));
 

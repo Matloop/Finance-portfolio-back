@@ -4,6 +4,7 @@ import com.example.carteira.model.dtos.AllocationNodeDto;
 import com.example.carteira.model.dtos.AssetPositionDto;
 import com.example.carteira.model.dtos.AssetSubCategoryDto;
 import com.example.carteira.model.dtos.AssetTableRowDto;
+import com.example.carteira.model.enums.AssetCategory;
 import com.example.carteira.model.enums.AssetType;
 import com.example.carteira.model.enums.Market;
 import org.springframework.stereotype.Service;
@@ -23,13 +24,8 @@ public class DashboardViewService {
             //Agrupa por tipo de ativo
             Map<String, Map<String, List<AssetPositionDto>>> groupedMap = allAssets.stream()
                     .collect(Collectors.groupingBy(
-                            asset -> {
-                                if (AssetType.FIXED_INCOME.equals(asset.getAssetType())) return "Brasil";
-                                if (AssetType.CRYPTO.equals(asset.getAssetType())) return "Cripto";
-                                if (Market.US.equals(asset.getMarket())) return "EUA";
-                                return "Brasil";
-                            },
-                            Collectors.groupingBy(asset -> getFriendlyAssetTypeName(asset.getAssetType()))
+                            AssetPositionDto::getDisplayCategoryKey, // Usa o novo método do DTO
+                            Collectors.groupingBy(asset -> asset.getAssetType().getFriendlyName()) // Usa o novo método do Enum
                     ));
             //Cria o resultado final, mostrando o valor de cada tipo de ativo e ativo, em hierarquia
             Map<String, List<AssetSubCategoryDto>> finalResult = new HashMap<>();
@@ -76,12 +72,7 @@ public class DashboardViewService {
         if (totalHeritage.compareTo(BigDecimal.ZERO) <= 0) return Map.of();
         //Organiza por tipo de ativo
         Map<String, List<AssetPositionDto>> byCategory = allAssets.stream()
-                .collect(Collectors.groupingBy(asset -> {
-                    if (AssetType.FIXED_INCOME.equals(asset.getAssetType())) return "brazil";
-                    if (AssetType.CRYPTO.equals(asset.getAssetType())) return "crypto";
-                    if (Market.US.equals(asset.getMarket())) return "usa";
-                    return "brazil";
-                }));
+                .collect(Collectors.groupingBy(AssetPositionDto::getDisplayCategoryKey));
 
         return byCategory.entrySet().stream().collect(Collectors.toMap(
                 Map.Entry::getKey,
@@ -153,13 +144,4 @@ public class DashboardViewService {
         ));
     }
 
-    private String getFriendlyAssetTypeName(AssetType assetType) {
-        return switch (assetType) {
-            case STOCK -> "Ações";
-            case ETF -> "ETFs";
-            case CRYPTO -> "Criptomoedas";
-            case FIXED_INCOME -> "Renda Fixa";
-            default -> assetType.name();
-        };
-    }
 }
