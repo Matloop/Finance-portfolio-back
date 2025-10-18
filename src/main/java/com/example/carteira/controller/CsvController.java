@@ -58,7 +58,7 @@ public class CsvController {
         }
 
         try {
-            ImportSummaryDto summary = csvService.importTransactionsFromCsv(file.getInputStream());
+            ImportSummaryDto summary = csvService.importTransactionsFromCsv(file.getInputStream(),user);
             return ResponseEntity.ok(summary);
         } catch (Exception e) {
             return ResponseEntity.internalServerError().body(

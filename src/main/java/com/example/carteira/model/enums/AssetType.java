@@ -13,6 +13,7 @@ public enum AssetType {
     CRI(AssetCategory.FIXED_INCOME, "Renda Fixa"),
     CRA(AssetCategory.FIXED_INCOME, "Renda Fixa"),
     CDB(AssetCategory.FIXED_INCOME, "Renda Fixa"),
+    FUND(AssetCategory.FUND, "Fundos imobiliários"),
     TESOURO_DIRETO(AssetCategory.FIXED_INCOME, "Renda Fixa"),
     DEBENTURE(AssetCategory.FIXED_INCOME, "Renda Fixa");
 
