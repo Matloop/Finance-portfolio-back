@@ -27,6 +27,8 @@ jobs:
       - name: Login no Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
+        with:
+          mask_password: true
 
       - name: Definir tag da imagem Docker
         id: docker_meta
