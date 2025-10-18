@@ -4,6 +4,7 @@ import com.example.carteira.model.Transaction;
 import com.example.carteira.model.dtos.AssetPositionDto;
 import com.example.carteira.model.dtos.AssetToFetch;
 import com.example.carteira.model.dtos.PriceData;
+import com.example.carteira.model.enums.AssetCategory;
 import com.example.carteira.model.enums.AssetType;
 import com.example.carteira.model.enums.Market;
 import com.example.carteira.model.enums.TransactionType;
@@ -49,7 +50,8 @@ public class PortfolioCalculatorService {
             List<Transaction> transactions,
             LocalDate calculationDate,
             Map<MarketDataKey, Optional<BigDecimal>> priceCache,
-            Map<LocalDate, Optional<BigDecimal>> exchangeRateCache) {
+            Map<LocalDate, Optional<BigDecimal>> exchangeRateCache
+            ) {
 
         Map<AssetKey, List<Transaction>> groupedTransactions = transactions.stream()
                 .filter(t -> t.getTicker() != null)
@@ -62,17 +64,11 @@ public class PortfolioCalculatorService {
             preloadCurrentPricesInBatch(assetsNeedingPrices, priceCache);
         }
 
-        Stream<AssetPositionDto> transactionalAssetsStream = groupedTransactions.entrySet().stream()
+        Stream<AssetPositionDto> assetsStream = groupedTransactions.entrySet().stream()
                 .map(entry -> calculateSinglePosition(entry.getKey(), entry.getValue(), calculationDate, priceCache, exchangeRateCache))
                 .filter(Objects::nonNull);
 
-        Stream<AssetPositionDto> fixedIncomeAssetsStream = fixedIncomeService
-                .getAllFixedIncomePositionsForDate(calculationDate)
-                .stream()
-                .filter(Objects::nonNull);
-
-        return Stream.concat(transactionalAssetsStream, fixedIncomeAssetsStream)
-                .collect(Collectors.toList());
+        return assetsStream.collect(Collectors.toList());
     }
 
     private void preloadCurrentPricesInBatch(List<AssetKey> assets, Map<MarketDataKey, Optional<BigDecimal>> priceCache) {

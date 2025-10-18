@@ -1,5 +1,6 @@
 package com.example.carteira.model;
 
+import com.example.carteira.model.enums.AssetCategory;
 import com.example.carteira.model.enums.AssetType;
 import com.example.carteira.model.enums.Market;
 import com.example.carteira.model.enums.TransactionType;
@@ -51,4 +52,5 @@ public class Transaction {
     @ManyToOne(fetch = FetchType.LAZY) // LAZY é mais performático
     @JoinColumn(name = "user_id", nullable = false)
     private User user;
+    private AssetCategory assetCategory;
 }

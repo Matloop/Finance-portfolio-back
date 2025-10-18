@@ -4,6 +4,7 @@ import com.example.carteira.model.FixedIncomeAsset;
 import com.example.carteira.model.Transaction;
 import com.example.carteira.model.User;
 import com.example.carteira.model.dtos.*;
+import com.example.carteira.model.enums.AssetCategory;
 import com.example.carteira.model.enums.AssetType;
 import com.example.carteira.model.enums.Market;
 import com.example.carteira.model.enums.TransactionType;
@@ -17,15 +18,17 @@ import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 @Service
 public class PortfolioService {
-    private static final Map<String, AssetType> FRIENDLY_NAME_TO_ASSET_TYPE = Map.of(
-            "ações", AssetType.STOCK,
-            "etfs", AssetType.ETF,
-            "renda fixa", AssetType.FIXED_INCOME
+    private static final Map<String, Predicate<Transaction>> ASSET_TYPE_FILTERS = Map.of(
+            "ações",      (Transaction t) -> t.getAssetType() == AssetType.STOCK,
+            "etfs",       (Transaction t) -> t.getAssetType() == AssetType.ETF,
+            "renda fixa", (Transaction t) -> t.getAssetType().getCategory() == AssetCategory.FIXED_INCOME,
+            "cripto",     (Transaction t) -> t.getAssetType().getCategory() == AssetCategory.CRYPTO
     );
     private final TransactionRepository transactionRepository;
     private final PortfolioCalculatorService calculatorService;
@@ -46,24 +49,30 @@ public class PortfolioService {
     private List<Transaction> getFilteredTransactions(List<Transaction> allTransactions, String category, String assetType, String ticker) {
         Stream<Transaction> filteredStream = allTransactions.stream();
 
+        // Lógica para Ticker (continua igual)
         if (ticker != null && !ticker.isBlank() && !"all".equalsIgnoreCase(ticker)) {
             return filteredStream.filter(t -> ticker.equalsIgnoreCase(t.getTicker())).collect(Collectors.toList());
         }
 
+        // Lógica para Categoria Geográfica (continua igual)
         if (category != null && !category.isBlank() && !"all".equalsIgnoreCase(category)) {
             if ("cripto".equalsIgnoreCase(category)) {
-                filteredStream = filteredStream.filter(t -> t.getAssetType() == AssetType.CRYPTO);
+                // Se o filtro geográfico já for "cripto", não precisamos do filtro de tipo de ativo.
+                filteredStream = filteredStream.filter(t -> t.getAssetType().getCategory() == AssetCategory.CRYPTO);
             } else if ("brasil".equalsIgnoreCase(category)) {
-                filteredStream = filteredStream.filter(t -> t.getMarket() == Market.B3 || t.getAssetType() == AssetType.FIXED_INCOME);
+                filteredStream = filteredStream.filter(t -> t.getMarket() == Market.B3 || t.getAssetType().getCategory() == AssetCategory.FIXED_INCOME);
             } else if ("eua".equalsIgnoreCase(category)) {
                 filteredStream = filteredStream.filter(t -> t.getMarket() == Market.US);
             }
         }
 
         if (assetType != null && !assetType.isBlank() && !"all".equalsIgnoreCase(assetType)) {
-            AssetType type = FRIENDLY_NAME_TO_ASSET_TYPE.get(assetType.toLowerCase());
-            if (type != null) {
-                filteredStream = filteredStream.filter(t -> t.getAssetType() == type);
+            // 1. Pega a lógica de filtro correta do mapa.
+            Predicate<Transaction> filter = ASSET_TYPE_FILTERS.get(assetType.toLowerCase());
+
+            // 2. Se encontrou uma lógica, aplica ela.
+            if (filter != null) {
+                filteredStream = filteredStream.filter(filter);
             }
         }
 
@@ -73,9 +82,8 @@ public class PortfolioService {
     public PortfolioDashboardDto getPortfolioDashboardData(User user) {
         LocalDate today = LocalDate.now();
         LocalDate twelveMonthsAgo = today.minusMonths(12);
-        List<Transaction> allTransactions = transactionRepository.findByUser(user);
-
-        List<AssetPositionDto> allCurrentAssets = calculatorService.calculateConsolidatedPortfolio(allTransactions, today);
+        List<Transaction> allUserAssets = getAllUserAssetsAsTransaction(user);
+        List<AssetPositionDto> allCurrentAssets = calculatorService.calculateConsolidatedPortfolio(allUserAssets, today);
 
         BigDecimal totalHeritage = allCurrentAssets.stream()
                 .map(AssetPositionDto::getCurrentValue)
@@ -85,7 +93,7 @@ public class PortfolioService {
                 .map(AssetPositionDto::getTotalInvested)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
-        List<AssetPositionDto> assetsTwelveMonthsAgo = calculatorService.calculateConsolidatedPortfolio(allTransactions, twelveMonthsAgo);
+        List<AssetPositionDto> assetsTwelveMonthsAgo = calculatorService.calculateConsolidatedPortfolio(allUserAssets, twelveMonthsAgo);
 
         BigDecimal heritageTwelveMonthsAgo = assetsTwelveMonthsAgo.stream()
                 .map(AssetPositionDto::getCurrentValue)
@@ -113,10 +121,10 @@ public class PortfolioService {
 
     public PortfolioEvolutionDto getPortfolioEvolutionData(User user, String category, String assetType, String ticker) {
         LocalDate today = LocalDate.now();
-        List<Transaction> allTransactions = transactionRepository.findByUser(user);
+        List<Transaction> allUserAssets = getAllUserAssetsAsTransaction(user);
 
         // 1. RESPONSABILIDADE ÚNICA: Obter a lista de transações já filtrada.
-        List<Transaction> filteredTransactions = getFilteredTransactions(allTransactions, category, assetType, ticker);
+        List<Transaction> filteredTransactions = getFilteredTransactions(allUserAssets, category, assetType, ticker);
 
         if (filteredTransactions.isEmpty()) {
             return new PortfolioEvolutionDto(Collections.emptyList());
@@ -170,11 +178,11 @@ public class PortfolioService {
     }
 
     public List<InvestedDetailDto> getInvestedValueDetails(User user) {
-        // 1. Busca todas as transações
-        List<Transaction> allTransactions = transactionRepository.findByUser(user);
+        // 1. Busca todas as transações e renda fixa
+        List<Transaction> allUserAssets = getAllUserAssetsAsTransaction(user);
 
         // 2. Calcula a posição atual de todos os ativos
-        List<AssetPositionDto> allCurrentAssets = calculatorService.calculateConsolidatedPortfolio(allTransactions, LocalDate.now());
+        List<AssetPositionDto> allCurrentAssets = calculatorService.calculateConsolidatedPortfolio(allUserAssets, LocalDate.now());
 
         // 3. Mapeia a lista de posições para o DTO de resposta da API
         return allCurrentAssets.stream()
@@ -187,7 +195,7 @@ public class PortfolioService {
     }
 
     public List<Transaction> getTransactionsForAsset(User user, String identifier, AssetType assetType) {
-        if (assetType == AssetType.FIXED_INCOME) {
+        if (assetType.getCategory() == AssetCategory.FIXED_INCOME) {
             // Se for Renda Fixa, busca no repositório de Renda Fixa
             return fixedIncomeRepository.findByNameAndUser(identifier,user)
                     .map(this::convertFixedIncomeToTransaction) // Converte o resultado para uma transação
@@ -199,9 +207,25 @@ public class PortfolioService {
         }
     }
 
+    private List<Transaction> getAllUserAssetsAsTransaction(User user){
+        List<Transaction> allTransactions = transactionRepository.findByUser(user);
+
+        List<FixedIncomeAsset> fixedIncomeAssets = fixedIncomeRepository.findByUser(user);
+
+        List<Transaction> fixedIncomeAsTransaction = fixedIncomeAssets.stream()
+                .map(this::convertFixedIncomeToTransaction)
+                .collect(Collectors.toList());
+
+        List<Transaction> allAssets = new ArrayList<>();
+        allAssets.addAll(allTransactions);
+        allAssets.addAll(fixedIncomeAsTransaction);
+
+        return allAssets;
+    }
+
     @Transactional
     public void deleteAsset(User user, String identifier, AssetType assetType) {
-        if (assetType == AssetType.FIXED_INCOME) {
+        if (assetType.getCategory() == AssetCategory.FIXED_INCOME) {
 
             fixedIncomeRepository.deleteByNameAndUser(identifier,user);
         } else {
@@ -213,7 +237,7 @@ public class PortfolioService {
         Transaction tx = new Transaction();
         tx.setId(fi.getId()); // Usa o mesmo ID para referência
         tx.setTicker(fi.getName());
-        tx.setAssetType(AssetType.FIXED_INCOME);
+        tx.setAssetType(fi.getAssetType());
         tx.setTransactionType(TransactionType.BUY);
         tx.setTransactionDate(fi.getInvestmentDate());
         tx.setQuantity(fi.getInvestedAmount());

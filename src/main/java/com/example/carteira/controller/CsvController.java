@@ -1,6 +1,7 @@
 // Crie este novo arquivo em: src/main/java/com/example/carteira/controller/CsvController.java
 package com.example.carteira.controller;
 
+import com.example.carteira.model.User;
 import com.example.carteira.model.dtos.ImportSummaryDto;
 import com.example.carteira.service.CsvService;
 import org.springframework.core.io.InputStreamResource;
@@ -8,6 +9,7 @@ import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -30,8 +32,8 @@ public class CsvController {
      * @return Uma resposta HTTP com o arquivo CSV para download.
      */
     @GetMapping("/export/transactions")
-    public ResponseEntity<Resource> exportTransactions() {
-        String csvContent = csvService.exportTransactionsToCsv();
+    public ResponseEntity<Resource> exportTransactions(@AuthenticationPrincipal User user) {
+        String csvContent = csvService.exportTransactionsToCsv(user);
 
         // Converte a string CSV em um recurso que pode ser enviado na resposta.
         InputStreamResource resource = new InputStreamResource(
@@ -48,7 +50,7 @@ public class CsvController {
                 .body(resource);
     }
     @PostMapping("/import/transactions")
-    public ResponseEntity<ImportSummaryDto> importTransactions(@RequestParam("file") MultipartFile file) {
+    public ResponseEntity<ImportSummaryDto> importTransactions(@RequestParam("file") MultipartFile file, @AuthenticationPrincipal User user) {
         if (file.isEmpty()) {
             return ResponseEntity.badRequest().body(
                     new ImportSummaryDto(0, 1, List.of("O arquivo enviado está vazio."))
@@ -56,7 +58,7 @@ public class CsvController {
         }
 
         try {
-            ImportSummaryDto summary = csvService.importTransactionsFromCsv(file.getInputStream());
+            ImportSummaryDto summary = csvService.importTransactionsFromCsv(file.getInputStream(),user);
             return ResponseEntity.ok(summary);
         } catch (Exception e) {
             return ResponseEntity.internalServerError().body(

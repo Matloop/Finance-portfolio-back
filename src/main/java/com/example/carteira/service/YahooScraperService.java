@@ -41,8 +41,8 @@ import java.util.stream.Collectors;
  */
 @Service
 @Primary
-public class WebScraperService implements MarketDataProvider {
-    private static final Logger logger = LoggerFactory.getLogger(WebScraperService.class);
+public class YahooScraperService implements MarketDataProvider {
+    private static final Logger logger = LoggerFactory.getLogger(YahooScraperService.class);
     private static final String BASE_URL = "https://finance.yahoo.com/quote/";
     private static final int MAX_CONCURRENT_SCRAPING = 20; // Limita scraping concorrente
 
@@ -55,7 +55,7 @@ public class WebScraperService implements MarketDataProvider {
     private final Map<String, BigDecimal> historicalPriceCache = new ConcurrentHashMap<>();
     private final Map<String, String> canonicalTickerCache = new ConcurrentHashMap<>();
 
-    public WebScraperService(ExchangeRateService exchangeRateService, WebClient.Builder webClientBuilder) {
+    public YahooScraperService(ExchangeRateService exchangeRateService, WebClient.Builder webClientBuilder) {
         this.exchangeRateService = exchangeRateService;
         this.webClient = webClientBuilder.baseUrl("https://query1.finance.yahoo.com").build();
     }

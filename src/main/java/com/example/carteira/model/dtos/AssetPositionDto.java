@@ -1,5 +1,6 @@
 package com.example.carteira.model.dtos;
 
+import com.example.carteira.model.enums.AssetCategory;
 import com.example.carteira.model.enums.AssetType;
 import com.example.carteira.model.enums.Market;
 import lombok.Getter;
@@ -21,4 +22,15 @@ public class AssetPositionDto {
     private BigDecimal currentPrice;
     private BigDecimal totalQuantity;
     private BigDecimal averagePrice;
+
+    public String getDisplayCategoryKey() {
+        if (this.getAssetType().getCategory() == AssetCategory.CRYPTO) {
+            return "Cripto";
+        }
+        if (this.getMarket() == Market.US) {
+            return "EUA";
+        }
+        // Renda Fixa e Ações/ETFs do Brasil caem aqui.
+        return "Brasil";
+    }
 }

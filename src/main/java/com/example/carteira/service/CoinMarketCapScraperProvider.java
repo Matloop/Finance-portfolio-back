@@ -1,3 +1,4 @@
+/*
 package com.example.carteira.service;
 
 import com.example.carteira.model.dtos.AssetSearchResultDto;
@@ -175,3 +176,5 @@ public class CoinMarketCapScraperProvider implements MarketDataProvider {
     ) {}
     @JsonIgnoreProperties(ignoreUnknown = true) private record CmcQuotePrice(BigDecimal price) {}
 }
+
+ */

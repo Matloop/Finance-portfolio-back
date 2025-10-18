@@ -1,5 +1,6 @@
 package com.example.carteira.model;
 
+import com.example.carteira.model.enums.AssetType;
 import com.example.carteira.model.enums.FixedIncomeIndex;
 import jakarta.persistence.*;
 import lombok.Getter;
@@ -19,7 +20,8 @@ public class FixedIncomeAsset {
 
     @Column(nullable = false)
     private String name;
-
+    @Column(nullable = false)
+    private AssetType assetType;
     @Column(nullable = false, precision = 19, scale = 5)
     private BigDecimal investedAmount;
 
