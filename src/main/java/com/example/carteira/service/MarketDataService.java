@@ -205,7 +205,6 @@ public class MarketDataService {
                 return;
             }
 
-            // CORREÇÃO: Cria lista única de ativos (sem duplicatas)
             List<AssetToFetch> uniqueAssets = transactionList.stream()
                     .map(t -> new AssetToFetch(
                             t.getTicker().toUpperCase(),
@@ -218,7 +217,6 @@ public class MarketDataService {
             logger.info("[{}] 📊 Buscando {} ativo(s) únicos do tipo {}",
                     logContext, uniqueAssets.size(), assetType);
 
-            // CORREÇÃO: Busca TODOS os ativos de uma vez (batch)
             fetchPricesWithFallback(availableProviders, uniqueAssets, logContext, assetType);
         });
     }

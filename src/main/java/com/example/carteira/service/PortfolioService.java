@@ -82,9 +82,8 @@ public class PortfolioService {
     public PortfolioDashboardDto getPortfolioDashboardData(User user) {
         LocalDate today = LocalDate.now();
         LocalDate twelveMonthsAgo = today.minusMonths(12);
-        List<Transaction> allTransactions = transactionRepository.findByUser(user);
-
-        List<AssetPositionDto> allCurrentAssets = calculatorService.calculateConsolidatedPortfolio(allTransactions, today);
+        List<Transaction> allUserAssets = getAllUserAssetsAsTransaction(user);
+        List<AssetPositionDto> allCurrentAssets = calculatorService.calculateConsolidatedPortfolio(allUserAssets, today);
 
         BigDecimal totalHeritage = allCurrentAssets.stream()
                 .map(AssetPositionDto::getCurrentValue)
@@ -94,7 +93,7 @@ public class PortfolioService {
                 .map(AssetPositionDto::getTotalInvested)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
-        List<AssetPositionDto> assetsTwelveMonthsAgo = calculatorService.calculateConsolidatedPortfolio(allTransactions, twelveMonthsAgo);
+        List<AssetPositionDto> assetsTwelveMonthsAgo = calculatorService.calculateConsolidatedPortfolio(allUserAssets, twelveMonthsAgo);
 
         BigDecimal heritageTwelveMonthsAgo = assetsTwelveMonthsAgo.stream()
                 .map(AssetPositionDto::getCurrentValue)
@@ -122,10 +121,10 @@ public class PortfolioService {
 
     public PortfolioEvolutionDto getPortfolioEvolutionData(User user, String category, String assetType, String ticker) {
         LocalDate today = LocalDate.now();
-        List<Transaction> allTransactions = transactionRepository.findByUser(user);
+        List<Transaction> allUserAssets = getAllUserAssetsAsTransaction(user);
 
         // 1. RESPONSABILIDADE ÚNICA: Obter a lista de transações já filtrada.
-        List<Transaction> filteredTransactions = getFilteredTransactions(allTransactions, category, assetType, ticker);
+        List<Transaction> filteredTransactions = getFilteredTransactions(allUserAssets, category, assetType, ticker);
 
         if (filteredTransactions.isEmpty()) {
             return new PortfolioEvolutionDto(Collections.emptyList());
@@ -179,11 +178,11 @@ public class PortfolioService {
     }
 
     public List<InvestedDetailDto> getInvestedValueDetails(User user) {
-        // 1. Busca todas as transações
-        List<Transaction> allTransactions = transactionRepository.findByUser(user);
+        // 1. Busca todas as transações e renda fixa
+        List<Transaction> allUserAssets = getAllUserAssetsAsTransaction(user);
 
         // 2. Calcula a posição atual de todos os ativos
-        List<AssetPositionDto> allCurrentAssets = calculatorService.calculateConsolidatedPortfolio(allTransactions, LocalDate.now());
+        List<AssetPositionDto> allCurrentAssets = calculatorService.calculateConsolidatedPortfolio(allUserAssets, LocalDate.now());
 
         // 3. Mapeia a lista de posições para o DTO de resposta da API
         return allCurrentAssets.stream()
@@ -206,6 +205,22 @@ public class PortfolioService {
             // Para outros ativos (Ações, Criptos, ETFs), busca no repositório de transações
             return transactionRepository.findByTickerAndUserOrderByTransactionDateAsc(identifier,user);
         }
+    }
+
+    private List<Transaction> getAllUserAssetsAsTransaction(User user){
+        List<Transaction> allTransactions = transactionRepository.findByUser(user);
+
+        List<FixedIncomeAsset> fixedIncomeAssets = fixedIncomeRepository.findByUser(user);
+
+        List<Transaction> fixedIncomeAsTransaction = fixedIncomeAssets.stream()
+                .map(this::convertFixedIncomeToTransaction)
+                .collect(Collectors.toList());
+
+        List<Transaction> allAssets = new ArrayList<>();
+        allAssets.addAll(allTransactions);
+        allAssets.addAll(fixedIncomeAsTransaction);
+
+        return allAssets;
     }
 
     @Transactional
