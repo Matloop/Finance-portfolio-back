@@ -11,14 +11,16 @@ import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Primary;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
-import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -28,15 +30,18 @@ import java.util.stream.Collectors;
 public class MarketDataService {
 
     private static final Logger logger = LoggerFactory.getLogger(MarketDataService.class);
+    // Chave principal para o Hash no Redis
+    private static final String PRICE_CACHE_KEY = "market-prices";
 
     private final TransactionRepository transactionRepository;
     private final List<MarketDataProvider> providers;
-    private final Map<String, BigDecimal> priceCache = new ConcurrentHashMap<>();
+    private final RedisTemplate<String, String> redisTemplate;
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
 
-    public MarketDataService(TransactionRepository transactionRepository, List<MarketDataProvider> providers) {
+    public MarketDataService(TransactionRepository transactionRepository, List<MarketDataProvider> providers, RedisTemplate<String, String> redisTemplate) {
         this.transactionRepository = transactionRepository;
         this.providers = providers;
+        this.redisTemplate = redisTemplate;
         logger.info("MarketDataService carregado com {} provedor(es) de dados.", providers.size());
     }
 
@@ -97,29 +102,47 @@ public class MarketDataService {
 
     public Mono<BigDecimal> getCachedPrice(String ticker) {
         String upperTicker = ticker.toUpperCase();
-        BigDecimal cachedPrice = priceCache.get(upperTicker);
+        Object cachedValue = redisTemplate.opsForHash().get(PRICE_CACHE_KEY, upperTicker);
 
-        if (cachedPrice != null) {
-            logger.debug("💾 Preço recuperado do cache para {}: {}", upperTicker, cachedPrice);
-            return Mono.just(cachedPrice);
+        if (cachedValue != null) {
+            try {
+                BigDecimal price = new BigDecimal(cachedValue.toString());
+                logger.debug("💾 Preço recuperado do cache Redis para {}: {}", upperTicker, price);
+                return Mono.just(price);
+            } catch (NumberFormatException e) {
+                logger.error("Erro ao converter valor do cache Redis para BigDecimal: '{}'", cachedValue);
+                return Mono.empty();
+            }
         }
 
-        logger.debug("⚠️ Preço não encontrado no cache para {}", upperTicker);
+        logger.debug("⚠️ Preço não encontrado no cache Redis para {}", upperTicker);
         return Mono.empty();
     }
 
     public BigDecimal getPrice(String ticker) {
-        return priceCache.getOrDefault(ticker.toUpperCase(), BigDecimal.ZERO);
+        String upperTicker = ticker.toUpperCase();
+        logger.debug("Verificando cache Redis para o preço atual de {}", upperTicker);
+
+        Object cachedValue = redisTemplate.opsForHash().get(PRICE_CACHE_KEY, upperTicker);
+        if (cachedValue != null) {
+            try {
+                return new BigDecimal(cachedValue.toString());
+            } catch (NumberFormatException e) {
+                logger.error("Erro ao converter valor do cache Redis para BigDecimal: '{}'", cachedValue);
+                return BigDecimal.ZERO;
+            }
+        }
+        return BigDecimal.ZERO;
     }
 
     public void invalidateCache(String ticker) {
-        priceCache.remove(ticker.toUpperCase());
-        logger.info("🗑️ Cache invalidado para: {}", ticker.toUpperCase());
+        redisTemplate.opsForHash().delete(PRICE_CACHE_KEY, ticker.toUpperCase());
+        logger.info("🗑️ Cache Redis invalidado para: {}", ticker.toUpperCase());
     }
 
     public void invalidateAllCache() {
-        priceCache.clear();
-        logger.info("🗑️ Todo o cache de preços foi invalidado");
+        redisTemplate.delete(PRICE_CACHE_KEY);
+        logger.info("🗑️ Todo o cache de preços foi invalidado no Redis");
     }
 
     public Mono<PriceData> getPriceWithFallback(AssetToFetch asset) {
@@ -135,7 +158,12 @@ public class MarketDataService {
     }
 
     public Map<String, BigDecimal> getAllPrices() {
-        return Collections.unmodifiableMap(priceCache);
+        Map<Object, Object> entries = redisTemplate.opsForHash().entries(PRICE_CACHE_KEY);
+        return entries.entrySet().stream()
+                .collect(Collectors.toMap(
+                        entry -> (String) entry.getKey(),
+                        entry -> new BigDecimal((String) entry.getValue())
+                ));
     }
 
     public void refreshAllMarketData() {
@@ -155,8 +183,11 @@ public class MarketDataService {
     }
 
     private void updateCache(PriceData priceData) {
-        priceCache.put(priceData.ticker().toUpperCase(), priceData.price());
-        logger.debug("💾 Cache atualizado: {} = {}", priceData.ticker().toUpperCase(), priceData.price());
+        String ticker = priceData.ticker().toUpperCase();
+        String price = priceData.price().toPlainString();
+
+        redisTemplate.opsForHash().put(PRICE_CACHE_KEY, ticker, price);
+        logger.debug("💾 Cache Redis atualizado: {} = {}", ticker, priceData.price());
     }
 
     List<MarketDataProvider> findProvidersFor(AssetType assetType) {
@@ -192,7 +223,6 @@ public class MarketDataService {
         }
         logger.info("[{}] 🚀 Iniciando busca para {} transação(ões).", logContext, transactions.size());
 
-        // Agrupa transações por tipo de ativo
         Map<AssetType, List<Transaction>> groupedByType = transactions.stream()
                 .collect(Collectors.groupingBy(Transaction::getAssetType));
 
@@ -240,7 +270,6 @@ public class MarketDataService {
                         assets.size(),
                         assetType);
 
-                // CORREÇÃO: Passa TODOS os ativos de uma vez (batch fetching)
                 return currentProvider.fetchPrices(assets);
             });
 
@@ -260,7 +289,6 @@ public class MarketDataService {
             }
         }
 
-        // Inscreve-se no resultado final
         priceFlux.subscribe(
                 this::updateCache,
                 error -> logger.error("[{}] ❌ Erro irrecuperável no fluxo de busca para o tipo {}: {}",

@@ -16,6 +16,7 @@ import org.jsoup.nodes.Element;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Primary;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
@@ -45,19 +46,22 @@ public class YahooScraperService implements MarketDataProvider {
     private static final Logger logger = LoggerFactory.getLogger(YahooScraperService.class);
     private static final String BASE_URL = "https://finance.yahoo.com/quote/";
     private static final int MAX_CONCURRENT_SCRAPING = 20; // Limita scraping concorrente
+    //chave principal redis
+    private static final String HISTORICAL_PRICE_CACHE_KEY = "historical-prices";
 
     private final ExchangeRateService exchangeRateService;
     private BigDecimal usdToBrlRate = BigDecimal.ONE;
     private static final String USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" +
             " (KHTML, like Gecko) Chrome/94.0.4606.81 Safari/537.36";
     private final WebClient webClient;
+    private final RedisTemplate<String, String> redisTemplate;
 
-    private final Map<String, BigDecimal> historicalPriceCache = new ConcurrentHashMap<>();
     private final Map<String, String> canonicalTickerCache = new ConcurrentHashMap<>();
 
-    public YahooScraperService(ExchangeRateService exchangeRateService, WebClient.Builder webClientBuilder) {
+    public YahooScraperService(ExchangeRateService exchangeRateService, WebClient.Builder webClientBuilder, RedisTemplate<String, String> redisTemplate) {
         this.exchangeRateService = exchangeRateService;
         this.webClient = webClientBuilder.baseUrl("https://query1.finance.yahoo.com").build();
+        this.redisTemplate = redisTemplate;
     }
 
     private PriceData extractPriceFromDocument(Document doc, String originalTicker) throws NumberFormatException {
@@ -90,35 +94,47 @@ public class YahooScraperService implements MarketDataProvider {
     @Override
     public Mono<PriceData> fetchHistoricalPrice(AssetToFetch asset, LocalDate date) {
         final String assetTicker = asset.ticker().toUpperCase();
-        final String cacheKey = assetTicker + "_" + date.toString();
-        BigDecimal cachedPrice = historicalPriceCache.get(cacheKey);
-        if (cachedPrice != null) {
-            logger.debug("💾 [Histórico Cache] Preço para {} em {} recuperado do cache: {}", assetTicker, date, cachedPrice);
-            return Mono.just(new PriceData(assetTicker, cachedPrice));
-        }
-        return findCanonicalTicker(asset)
-                .flatMap(canonicalTicker -> {
-                    logger.info("Buscando preço histórico para {} ({}) na data {}",
-                            asset.ticker(), canonicalTicker, date);
-                    return webClient.get()
-                            .uri(uriBuilder -> uriBuilder
-                                    .path("/v8/finance/chart/" + canonicalTicker)
-                                    .queryParam("range", "5y")
-                                    .queryParam("interval", "1d")
-                                    .build())
-                            .retrieve()
-                            .bodyToMono(YahooChartResponseDto.class)
-                            .map(response -> extractHistoricalPriceFromChart(response, asset.ticker(), date));
+        final String fieldKey = assetTicker + ":" + date.toString(); // Chave no formato "TICKER:YYYY-MM-DD"
+
+        // 1. Tenta buscar no cache Redis primeiro
+        return Mono.fromCallable(() -> {
+                    Object cachedValue = redisTemplate.opsForHash().get(HISTORICAL_PRICE_CACHE_KEY, fieldKey);
+                    if (cachedValue != null) {
+                        logger.debug("💾 [Histórico Redis] Preço para {} em {} recuperado do cache.", assetTicker, date);
+                        return new PriceData(assetTicker, new BigDecimal(cachedValue.toString()));
+                    }
+                    return null; // Retorna nulo se não encontrar no cache
                 })
-                .filter(Objects::nonNull)
-                .doOnNext(priceData -> {
-                    historicalPriceCache.put(cacheKey, priceData.price());
-                    logger.debug("✅ [Histórico Cache] Preço para {} em {} adicionado ao cache.", assetTicker, date);
-                })
+                .subscribeOn(Schedulers.boundedElastic()) // Executa a chamada Redis em uma thread não bloqueante
+                .switchIfEmpty(Mono.defer(() -> { // 2. Se o cache estiver vazio, busca na web
+                    logger.debug("⚠️ [Histórico Redis] Preço para {} em {} não encontrado. Buscando na web...", assetTicker, date);
+                    return findCanonicalTicker(asset)
+                            .flatMap(canonicalTicker -> fetchHistoricalPriceFromApi(asset.ticker(), canonicalTicker, date))
+                            .doOnNext(priceData -> { // 3. Se a busca for bem-sucedida, salva no cache Redis
+                                String price = priceData.price().toPlainString();
+                                redisTemplate.opsForHash().put(HISTORICAL_PRICE_CACHE_KEY, fieldKey, price);
+                                logger.info("✅ [Histórico Redis] Preço para {} em {} salvo no cache.", assetTicker, date);
+                            });
+                }))
                 .onErrorResume(e -> {
-                    logger.error("Erro ao buscar preço histórico para {}: {}", asset.ticker(), e.getMessage());
+                    logger.error("❌ Erro final ao buscar preço histórico para {}: {}", asset.ticker(), e.getMessage());
                     return Mono.empty();
                 });
+    }
+
+    private Mono<PriceData> fetchHistoricalPriceFromApi(String originalTicker, String canonicalTicker, LocalDate date) {
+        logger.info("Buscando preço histórico para {} ({}) na data {}",
+                originalTicker, canonicalTicker, date);
+        return webClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/v8/finance/chart/" + canonicalTicker)
+                        .queryParam("range", "5y")
+                        .queryParam("interval", "1d")
+                        .build())
+                .retrieve()
+                .bodyToMono(YahooChartResponseDto.class)
+                .map(response -> extractHistoricalPriceFromChart(response, originalTicker, date))
+                .filter(Objects::nonNull);
     }
 
     private PriceData extractHistoricalPriceFromChart(YahooChartResponseDto response,
@@ -128,10 +144,8 @@ public class YahooScraperService implements MarketDataProvider {
             ChartDataDto data = response.chart().result().get(0);
             if (data != null && data.timestamp() != null &&
                     data.indicators() != null && !data.indicators().quote().isEmpty()) {
-
                 List<Long> timestamps = data.timestamp();
                 List<BigDecimal> prices = data.indicators().quote().get(0).close();
-
                 if (prices != null && timestamps.size() == prices.size()) {
                     for (int i = timestamps.size() - 1; i >= 0; i--) {
                         if (timestamps.get(i) != null && prices.get(i) != null) {
@@ -149,9 +163,6 @@ public class YahooScraperService implements MarketDataProvider {
         return null;
     }
 
-    /**
-     * CORREÇÃO #2: Busca ticker canônico com cache para evitar requisições repetidas
-     */
     private Mono<String> findCanonicalTicker(AssetToFetch asset) {
         final String searchTerm = asset.ticker();
 
@@ -209,10 +220,6 @@ public class YahooScraperService implements MarketDataProvider {
                 .onErrorResume(e -> Mono.empty());
     }
 
-    /**
-     * CORREÇÃO #3: Batch fetching via API de chart (muito mais rápido que scraping)
-     * Agrupa ativos por tipo e usa a estratégia mais eficiente
-     */
     @Override
     public Flux<PriceData> fetchPrices(List<AssetToFetch> assetsToFetch) {
         if (assetsToFetch.isEmpty()) return Flux.empty();
@@ -233,9 +240,6 @@ public class YahooScraperService implements MarketDataProvider {
         return Flux.merge(cryptoFlux, stockFlux);
     }
 
-    /**
-     * CORREÇÃO #4: Busca em lote de criptomoedas via API (sem scraping)
-     */
     private Flux<PriceData> fetchCryptoPricesBatch(List<AssetToFetch> cryptos) {
         if (cryptos.isEmpty()) return Flux.empty();
 
@@ -245,10 +249,6 @@ public class YahooScraperService implements MarketDataProvider {
                 .flatMap(this::fetchCryptocurrencyPriceViaAPI, 3); // 3 requisições concorrentes
     }
 
-    /**
-     * CORREÇÃO #5: Busca em lote de ações/ETFs com fallback inteligente
-     * Tenta API primeiro (rápido), scraping só como último recurso
-     */
     private Flux<PriceData> fetchStockPricesBatch(List<AssetToFetch> stocks) {
         if (stocks.isEmpty()) return Flux.empty();
 
@@ -264,9 +264,6 @@ public class YahooScraperService implements MarketDataProvider {
                         MAX_CONCURRENT_SCRAPING); // Limita scraping concorrente
     }
 
-    /**
-     * CORREÇÃO #6: Novo método para buscar via API de chart (rápido e confiável)
-     */
     private Mono<PriceData> fetchStockPriceViaAPI(AssetToFetch asset) {
         return findCanonicalTicker(asset)
                 .flatMap(canonicalTicker -> {
@@ -288,9 +285,6 @@ public class YahooScraperService implements MarketDataProvider {
                 });
     }
 
-    /**
-     * CORREÇÃO #7: Scraping agora é o último recurso (paralelização controlada)
-     */
     private Mono<PriceData> fetchStockPriceViaScraping(AssetToFetch asset) {
         String tickerForUrl = asset.ticker();
         if (asset.market() == Market.B3 && !tickerForUrl.contains(".")) {
