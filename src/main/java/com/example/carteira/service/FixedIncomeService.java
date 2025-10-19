@@ -18,6 +18,7 @@ import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -169,6 +170,16 @@ public class FixedIncomeService {
         return fixedIncomeRepository.findAll().stream()
                 .filter(asset -> !asset.getInvestmentDate().isAfter(calculationDate))
                 .map(asset -> calculatePositionForDate(asset, calculationDate))
+                .collect(Collectors.toList());
+    }
+
+    public List<AssetPositionDto> getFixedIncomePositionsForDate(List<String> assetNames, LocalDate calculationDate) {
+        // Encontra todos os ativos de Renda Fixa pelos nomes fornecidos
+        return fixedIncomeRepository.findByNameIn(assetNames).stream()
+                .filter(asset -> !asset.getInvestmentDate().isAfter(calculationDate))
+                // Mapeia cada ativo para sua posição calculada na data específica
+                .map(asset -> calculatePositionForDate(asset, calculationDate))
+                .filter(Objects::nonNull)
                 .collect(Collectors.toList());
     }
 

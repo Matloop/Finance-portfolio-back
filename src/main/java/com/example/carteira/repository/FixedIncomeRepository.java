@@ -10,9 +10,11 @@ import java.util.Optional;
 
 public interface FixedIncomeRepository extends JpaRepository<FixedIncomeAsset, Long> {
     Optional<FixedIncomeAsset> findByName(String name);
+    List<FixedIncomeAsset> findByNameIn(List<String> names);
     void deleteByName(String name);
     List<FixedIncomeAsset> findByUser(User user);
     Optional<FixedIncomeAsset> findByIdAndUser(Long id, User user);
     void deleteByNameAndUser(String name, User user);
     Optional<FixedIncomeAsset> findByNameAndUser(String name, User user);
+
 }

@@ -4,6 +4,7 @@ import com.example.carteira.model.Transaction;
 import com.example.carteira.model.dtos.AssetPositionDto;
 import com.example.carteira.model.dtos.AssetToFetch;
 import com.example.carteira.model.dtos.PriceData;
+import com.example.carteira.model.enums.AssetCategory;
 import com.example.carteira.model.enums.AssetType;
 import com.example.carteira.model.enums.Market;
 import com.example.carteira.model.enums.TransactionType;
@@ -52,6 +53,39 @@ public class PortfolioCalculatorService {
             LocalDate calculationDate,
             Map<LocalDate, Optional<BigDecimal>> exchangeRateCache
     ) {
+        // --- INÍCIO DA MUDANÇA PRINCIPAL ---
+
+        // 1. Separe as transações por categoria de ativo
+        Map<Boolean, List<Transaction>> partitionedTransactions = transactions.stream()
+                .collect(Collectors.partitioningBy(t -> t.getAssetType().getCategory() == AssetCategory.FIXED_INCOME));
+
+        List<Transaction> fixedIncomeTransactions = partitionedTransactions.get(true);
+        List<Transaction> variableIncomeTransactions = partitionedTransactions.get(false);
+
+        // 2. Calcule as posições de Renda Fixa usando o serviço correto
+        List<AssetPositionDto> fixedIncomePositions = calculateFixedIncomePositions(fixedIncomeTransactions, calculationDate);
+
+        // 3. Calcule as posições de Renda Variável (lógica existente)
+        List<AssetPositionDto> variableIncomePositions = calculateVariableIncomePositions(variableIncomeTransactions, calculationDate, exchangeRateCache);
+
+        // 4. Junte os dois resultados
+        List<AssetPositionDto> allPositions = new ArrayList<>();
+        allPositions.addAll(fixedIncomePositions);
+        allPositions.addAll(variableIncomePositions);
+
+        return allPositions;
+        // --- FIM DA MUDANÇA PRINCIPAL ---
+    }
+
+    private List<AssetPositionDto> calculateVariableIncomePositions(
+            List<Transaction> transactions,
+            LocalDate calculationDate,
+            Map<LocalDate, Optional<BigDecimal>> exchangeRateCache
+    ) {
+        if (transactions.isEmpty()) {
+            return Collections.emptyList();
+        }
+
         Map<AssetKey, List<Transaction>> groupedTransactions = transactions.stream()
                 .filter(t -> t.getTicker() != null)
                 .collect(Collectors.groupingBy(t -> new AssetKey(t.getTicker(), t.getAssetType(), t.getMarket())));
@@ -59,18 +93,30 @@ public class PortfolioCalculatorService {
         List<AssetKey> assetsNeedingPrices = new ArrayList<>(groupedTransactions.keySet());
 
         if (calculationDate.isEqual(LocalDate.now())) {
-            // Chamada corrigida sem o cache local
             preloadCurrentPricesInBatch(assetsNeedingPrices);
         }
 
-        Stream<AssetPositionDto> assetsStream = groupedTransactions.entrySet().stream()
-                .map(entry -> calculateSinglePosition(entry.getKey(), entry.getValue(), calculationDate, exchangeRateCache)) // Chamada corrigida
-                .filter(Objects::nonNull);
-
-        return assetsStream.collect(Collectors.toList());
+        return groupedTransactions.entrySet().stream()
+                .map(entry -> calculateSinglePosition(entry.getKey(), entry.getValue(), calculationDate, exchangeRateCache))
+                .filter(Objects::nonNull)
+                .collect(Collectors.toList());
     }
 
-    // Método corrigido sem o `priceCache`
+    private List<AssetPositionDto> calculateFixedIncomePositions(List<Transaction> fixedIncomeTransactions, LocalDate calculationDate) {
+        if (fixedIncomeTransactions.isEmpty()) {
+            return Collections.emptyList();
+        }
+        logger.info("📊 Calculando {} posição(ões) de Renda Fixa para a data {}", fixedIncomeTransactions.size(), calculationDate);
+
+        // Extrai os nomes (que usamos como identificadores) dos ativos de Renda Fixa
+        Set<String> fixedIncomeNames = fixedIncomeTransactions.stream()
+                .map(Transaction::getTicker)
+                .collect(Collectors.toSet());
+
+        // Delega o cálculo para o FixedIncomeService, que sabe como fazer isso
+        return fixedIncomeService.getFixedIncomePositionsForDate(new ArrayList<>(fixedIncomeNames), calculationDate);
+    }
+
     private void preloadCurrentPricesInBatch(List<AssetKey> assets) {
         if (assets.isEmpty()) {
             return;
@@ -108,7 +154,6 @@ public class PortfolioCalculatorService {
         });
     }
 
-    // Método corrigido sem o `priceCache`
     private AssetPositionDto calculateSinglePosition(
             AssetKey key,
             List<Transaction> transactions,
@@ -199,7 +244,6 @@ public class PortfolioCalculatorService {
         return new PositionCalculationResult(currentQuantity, totalInvestedValue);
     }
 
-    // NOVO MÉTODO `fetchPrice` QUE SUBSTITUI O ANTIGO `fetchAndCachePrice`
     private Optional<BigDecimal> fetchPrice(AssetKey key, LocalDate date) {
         Mono<PriceData> priceMono;
 
