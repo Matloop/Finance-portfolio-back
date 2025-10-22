@@ -13,16 +13,16 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.Optional;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
 class TransactionServiceTest {
@@ -67,6 +67,36 @@ class TransactionServiceTest {
     }
 
     @Test
-    void deleteTransaction() {
+    @DisplayName("Should delete transaction when it exists and belongs to user")
+    void deleteTransactionWhenExistsAndBelongsToUser() {
+        User user = new  User();
+        Long transactionId = 1L;
+
+        when(transactionRepository.findByIdAndUser(transactionId,user)).thenReturn(Optional.of(new Transaction()));
+
+
+        transactionService.deleteTransaction(user, transactionId);
+
+        verify(transactionRepository).deleteById(transactionId);
+    }
+    @Test
+    @DisplayName("Should throw an exception when user does not exists")
+    void deleteTransactionWhenUserNotFound(){
+        User user = new User();
+        Long transactionId = 1L;
+        when(transactionRepository.findByIdAndUser(transactionId,user)).thenReturn(Optional.empty());
+
+        assertThrows(ResponseStatusException.class, () -> transactionService.deleteTransaction(user,transactionId));
+
+        verify(transactionRepository, never()).deleteById(any());
+    }
+    @Test
+    @DisplayName("Should not delete when transaction don't belong to the user")
+    void deleteTransactionWhenNotBelongsToUser(){
+        User user = new User();
+        Long transactionId = 1L;
+
+        when(transactionRepository.findByIdAndUser(transactionId,user)).thenReturn(Optional.empty());
+
     }
 }
