@@ -78,6 +78,7 @@ class TransactionServiceTest {
         transactionService.deleteTransaction(user, transactionId);
 
         verify(transactionRepository).deleteById(transactionId);
+        verify(transactionRepository).findByIdAndUser(transactionId,user);
     }
     @Test
     @DisplayName("Should throw an exception when user does not exists")
@@ -90,13 +91,5 @@ class TransactionServiceTest {
 
         verify(transactionRepository, never()).deleteById(any());
     }
-    @Test
-    @DisplayName("Should not delete when transaction don't belong to the user")
-    void deleteTransactionWhenNotBelongsToUser(){
-        User user = new User();
-        Long transactionId = 1L;
 
-        when(transactionRepository.findByIdAndUser(transactionId,user)).thenReturn(Optional.empty());
-
-    }
 }
