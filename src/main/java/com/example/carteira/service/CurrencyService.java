@@ -5,12 +5,15 @@ import com.example.carteira.model.dtos.AssetToFetch;
 import com.example.carteira.model.dtos.PriceData;
 import com.example.carteira.model.enums.AssetType;
 import com.example.carteira.service.util.ExchangeRateService;
+import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
+
+@Service
 
 public class CurrencyService implements MarketDataProvider {
     private final ExchangeRateService exchangeRateService;

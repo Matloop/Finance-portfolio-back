@@ -89,6 +89,7 @@ public class MarketDataService {
         String cleanedTerm = term.replace("&", "");
 
         List<Flux<AssetSearchResultDto>> searchFluxes = providers.stream()
+                .filter(provider -> !provider.supports(AssetType.DOLLAR))
                 .map(provider -> provider.search(cleanedTerm)
                         .onErrorResume(e -> {
                             logger.error("Erro na busca do provedor {}: {}",

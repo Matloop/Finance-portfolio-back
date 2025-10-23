@@ -19,7 +19,6 @@ import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.*;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 @Service
 public class PortfolioCalculatorService {
@@ -276,7 +275,9 @@ public class PortfolioCalculatorService {
             LocalDate date,
             Map<LocalDate, Optional<BigDecimal>> exchangeRateCache,
             boolean isPrice) {
-
+        if (key.assetType() == AssetType.DOLLAR) {
+            return valueToConvert;
+        }
         boolean needsConversion = isPrice
                 ? (key.assetType() == AssetType.CRYPTO || key.market() == Market.US)
                 : key.market() == Market.US;
