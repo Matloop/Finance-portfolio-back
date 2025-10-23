@@ -10,6 +10,7 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
@@ -32,9 +33,13 @@ public class ExchangeRateService {
     private static final String USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/94.0.4606.81 Safari/537.36";
     private final Map<LocalDate, BigDecimal> historicalUsdBrlRateCache = new ConcurrentHashMap<>();
     private final WebClient yahooChartWebClient;
+    private static final String CURRENT_RATE_CACHE_KEY = "exchange-rate";
+    private final RedisTemplate<String, String> redisTemplate;
+    private static final String HISTORICAL_VALUES_CACHE_KEY = "historical-values";
 
-    public ExchangeRateService(WebClient.Builder webClientBuilder) {
+    public ExchangeRateService(WebClient.Builder webClientBuilder, RedisTemplate<String, String> redisTemplate) {
         this.yahooChartWebClient = webClientBuilder.baseUrl("https://query1.finance.yahoo.com").build();
+        this.redisTemplate = redisTemplate;
     }
 
     /**
