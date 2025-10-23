@@ -5,6 +5,7 @@ public enum AssetType {
 
     STOCK(AssetCategory.EQUITY, "Ações"),
     ETF(AssetCategory.EQUITY, "ETFs"),
+    DOLLAR(AssetCategory.CURRENCY, "Dólar"),
 
     CRYPTO(AssetCategory.CRYPTO, "Criptomoedas"),
 

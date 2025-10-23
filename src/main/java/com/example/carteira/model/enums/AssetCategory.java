@@ -4,5 +4,6 @@ public enum AssetCategory {
     EQUITY,
     CRYPTO,
     FIXED_INCOME,
-    FUND
+    FUND,
+    CURRENCY
 }

@@ -2,6 +2,7 @@
 package com.example.carteira.service.util;
 
 // --- CORREÇÃO: Imports corretos para os DTOs públicos ---
+
 import com.example.carteira.model.dtos.yahooscraper.ChartDataDto;
 import com.example.carteira.model.dtos.yahooscraper.YahooChartResponseDto;
 import org.jsoup.Jsoup;
@@ -10,11 +11,10 @@ import org.jsoup.nodes.Element;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import org.springframework.web.reactive.function.client.WebClient; // <-- Import necessário
+import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
-import java.io.IOException;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -25,16 +25,14 @@ import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Service
-public class    ExchangeRateService {
+public class ExchangeRateService {
 
     private static final Logger logger = LoggerFactory.getLogger(ExchangeRateService.class);
     private static final String EXCHANGE_RATE_URL = "https://finance.yahoo.com/quote/USDBRL=X/";
     private static final String USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/94.0.4606.81 Safari/537.36";
     private final Map<LocalDate, BigDecimal> historicalUsdBrlRateCache = new ConcurrentHashMap<>();
-    // --- CORREÇÃO: Declarar o WebClient para a API do Yahoo ---
     private final WebClient yahooChartWebClient;
 
-    // --- CORREÇÃO: Inicializar o WebClient no construtor ---
     public ExchangeRateService(WebClient.Builder webClientBuilder) {
         this.yahooChartWebClient = webClientBuilder.baseUrl("https://query1.finance.yahoo.com").build();
     }
