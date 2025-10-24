@@ -1,7 +1,5 @@
-// Em service/util/ExchangeRateService.java
-package com.example.carteira.service.util;
 
-// --- CORREÇÃO: Imports corretos para os DTOs públicos ---
+package com.example.carteira.service.util;
 
 import com.example.carteira.model.dtos.yahooscraper.ChartDataDto;
 import com.example.carteira.model.dtos.yahooscraper.YahooChartResponseDto;

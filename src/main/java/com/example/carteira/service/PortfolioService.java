@@ -170,6 +170,13 @@ public class PortfolioService {
         BigDecimal valorAplicado = positions.stream().map(AssetPositionDto::getTotalInvested).reduce(BigDecimal.ZERO, BigDecimal::add);
 
         DateTimeFormatter formatter = DateTimeFormatter.ofPattern("MMM/yy", Locale.ENGLISH);
+        if(date.equals(LocalDate.now())){
+            return new PortfolioEvolutionPointDto(
+                    "Hoje",
+                    patrimonio.setScale(2, RoundingMode.HALF_UP),
+                    valorAplicado.setScale(2, RoundingMode.HALF_UP)
+            );
+        }
         return new PortfolioEvolutionPointDto(
                 date.format(formatter),
                 patrimonio.setScale(2, RoundingMode.HALF_UP),
