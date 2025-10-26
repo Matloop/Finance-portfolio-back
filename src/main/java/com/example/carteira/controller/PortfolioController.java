@@ -2,10 +2,14 @@ package com.example.carteira.controller;
 
 import com.example.carteira.model.Transaction;
 import com.example.carteira.model.User;
-import com.example.carteira.model.dtos.*;
+import com.example.carteira.model.dtos.InvestedDetailDto;
+import com.example.carteira.model.dtos.PortfolioDashboardDto;
+import com.example.carteira.model.dtos.PortfolioEvolutionDto;
+import com.example.carteira.model.dtos.TagAssetRequestDto;
 import com.example.carteira.model.enums.AssetType;
 import com.example.carteira.service.MarketDataService;
 import com.example.carteira.service.PortfolioService;
+import com.example.carteira.service.UserAssetPreferenceService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
@@ -18,10 +22,12 @@ import java.util.Map;
 public class PortfolioController {
     private final PortfolioService portfolioService;
     private final MarketDataService marketDataService;
+    private final UserAssetPreferenceService userAssetPreferenceService;
 
-    public PortfolioController(PortfolioService portfolioService, MarketDataService marketDataService) {
+    public PortfolioController(PortfolioService portfolioService, MarketDataService marketDataService, UserAssetPreferenceService userAssetPreferenceService) {
         this.portfolioService = portfolioService;
         this.marketDataService = marketDataService;
+        this.userAssetPreferenceService = userAssetPreferenceService;
     }
 
 
@@ -70,6 +76,12 @@ public class PortfolioController {
 
         portfolioService.deleteAsset(user, identifier, assetType);
         return ResponseEntity.noContent().build(); // Retorna 204 No Content, o padrão para DELETE
+    }
+
+    @PostMapping("/preferences/tag-asset")
+    public ResponseEntity<Void> saveUserCashPreference(@AuthenticationPrincipal User user, @RequestBody TagAssetRequestDto dto){
+        userAssetPreferenceService.tagAssetAsCash(user, dto.getAssetIdentifier(), dto.isCash());
+        return ResponseEntity.ok().build();
     }
 
 

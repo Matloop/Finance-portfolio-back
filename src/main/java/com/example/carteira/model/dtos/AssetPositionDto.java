@@ -11,6 +11,7 @@ import java.math.BigDecimal;
 @Setter
 public class AssetPositionDto {
     private Long id; // ID da transação ou do ativo de RF
+    private String displayCategory;
     private String ticker;
     private String name;// Ticker ou Nome do Ativo
     private AssetType assetType; // "STOCK", "CRYPTO", ou "FIXED_INCOME"
@@ -24,6 +25,9 @@ public class AssetPositionDto {
     private BigDecimal averagePrice;
 
     public String getDisplayCategoryKey() {
+        if (this.displayCategory != null && !this.displayCategory.isBlank()) {
+            return this.displayCategory;
+        }
         if (this.getAssetType().getCategory() == AssetCategory.CRYPTO) {
             return "Cripto";
         }

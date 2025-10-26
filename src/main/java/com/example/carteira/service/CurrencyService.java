@@ -57,7 +57,7 @@ public class CurrencyService implements MarketDataProvider {
 
     @Override
     public Mono<Void> initialize() {
-        return null;
+        return Mono.empty();
     }
 
     @Override

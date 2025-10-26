@@ -1,5 +1,6 @@
 package com.example.carteira.service;
 
+import com.example.carteira.model.CashBalance;
 import com.example.carteira.model.FixedIncomeAsset;
 import com.example.carteira.model.Transaction;
 import com.example.carteira.model.User;
@@ -8,8 +9,11 @@ import com.example.carteira.model.enums.AssetCategory;
 import com.example.carteira.model.enums.AssetType;
 import com.example.carteira.model.enums.Market;
 import com.example.carteira.model.enums.TransactionType;
+import com.example.carteira.repository.CashBalanceRepository;
 import com.example.carteira.repository.FixedIncomeRepository;
 import com.example.carteira.repository.TransactionRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -24,6 +28,7 @@ import java.util.stream.Stream;
 
 @Service
 public class PortfolioService {
+    private static final Logger log = LoggerFactory.getLogger(PortfolioService.class);
     private static final Map<String, Predicate<Transaction>> ASSET_TYPE_FILTERS = Map.of(
             "ações",      (Transaction t) -> t.getAssetType() == AssetType.STOCK,
             "etfs",       (Transaction t) -> t.getAssetType() == AssetType.ETF,
@@ -34,16 +39,20 @@ public class PortfolioService {
     private final PortfolioCalculatorService calculatorService;
     private final DashboardViewService viewService;
     private final FixedIncomeRepository fixedIncomeRepository;
+    private final UserAssetPreferenceService userAssetPreferenceService;
+    private final CashBalanceRepository cashBalanceRepository;
 
     public PortfolioService(TransactionRepository transactionRepository,
                             PortfolioCalculatorService calculatorService,
-                            DashboardViewService viewService, FixedIncomeRepository fixedIncomeRepository) {
+                            DashboardViewService viewService, FixedIncomeRepository fixedIncomeRepository, UserAssetPreferenceService userAssetPreferenceService, CashBalanceRepository cashBalanceRepository) {
         this.transactionRepository = transactionRepository;
         this.calculatorService = calculatorService;
         this.viewService = viewService;
         this.fixedIncomeRepository = fixedIncomeRepository;
 
 
+        this.userAssetPreferenceService = userAssetPreferenceService;
+        this.cashBalanceRepository = cashBalanceRepository;
     }
 
     private List<Transaction> getFilteredTransactions(List<Transaction> allTransactions, String category, String assetType, String ticker) {
@@ -79,17 +88,68 @@ public class PortfolioService {
         return filteredStream.collect(Collectors.toList());
     }
 
+
     public PortfolioDashboardDto getPortfolioDashboardData(User user) {
+        log.info("==> [PORTFOLIO_SERVICE] Iniciando cálculo do dashboard...");
         LocalDate today = LocalDate.now();
         LocalDate twelveMonthsAgo = today.minusMonths(12);
-        List<Transaction> allUserAssets = getAllUserAssetsAsTransaction(user);
-        List<AssetPositionDto> allCurrentAssets = calculatorService.calculateConsolidatedPortfolio(allUserAssets, today);
 
-        BigDecimal totalHeritage = allCurrentAssets.stream()
+        List<Transaction> allUserAssets = getAllUserAssetsAsTransaction(user);
+
+        log.info("==> [PORTFOLIO_SERVICE] Calculando posições consolidadas...");
+        List<AssetPositionDto> allCurrentAssets = calculatorService.calculateConsolidatedPortfolio(allUserAssets, today);
+        log.info("==> [PORTFOLIO_SERVICE] Posições calculadas ({} itens): {}", allCurrentAssets.size(), allCurrentAssets.stream().map(a -> a.getTicker() != null ? a.getTicker() : a.getName()).collect(Collectors.toList()));
+
+        Set<String> cashEquivalentIdentifiers = userAssetPreferenceService.getCashEquivalentAssetIdentifiers(user);
+
+        List<CashBalance> cashBalances = cashBalanceRepository.findByUser(user);
+        BigDecimal pureCashValue = cashBalances.stream()
+                .map(CashBalance::getAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        log.info("==> [PORTFOLIO_SERVICE] Valor de Caixa Puro encontrado: {}", pureCashValue);
+
+        List<AssetPositionDto> finalAssetsForAllocation = new ArrayList<>();
+        BigDecimal cashEquivalentValue = BigDecimal.ZERO;
+
+        log.info("==> [PORTFOLIO_SERVICE] Iniciando re-categorização dos ativos...");
+        for (AssetPositionDto asset : allCurrentAssets) {
+            String identifier = asset.getTicker() != null ? asset.getTicker() : asset.getName();
+
+            if (cashEquivalentIdentifiers.contains(identifier)) {
+                // Seu log "!!! ENCONTRADO ATIVO DE CAIXA" já está ótimo aqui.
+                System.out.println("!!! ENCONTRADO ATIVO DE CAIXA: " + identifier);
+                cashEquivalentValue = cashEquivalentValue.add(asset.getCurrentValue());
+            } else {
+                finalAssetsForAllocation.add(asset);
+            }
+        }
+        log.info("==> [PORTFOLIO_SERVICE] Valor total dos ATIVOS equivalentes a caixa: {}", cashEquivalentValue);
+
+        BigDecimal totalCashValue = cashEquivalentValue.add(pureCashValue);
+
+        if (totalCashValue.compareTo(BigDecimal.ZERO) > 0) {
+            log.info("==> [PORTFOLIO_SERVICE] Valor total de Caixa (puro + equivalentes): {}. Criando ativo virtual...", totalCashValue);
+            AssetPositionDto cashPosition = new AssetPositionDto();
+            cashPosition.setName("Caixa");
+            cashPosition.setDisplayCategory("Caixa");
+            cashPosition.setAssetType(AssetType.CASH);
+            cashPosition.setCurrentValue(totalCashValue);
+            cashPosition.setTotalInvested(totalCashValue);
+            cashPosition.setTotalQuantity(BigDecimal.ONE);
+            cashPosition.setAveragePrice(totalCashValue);
+            cashPosition.setProfitability(BigDecimal.ZERO);
+            cashPosition.setProfitOrLoss(BigDecimal.ZERO);
+
+            finalAssetsForAllocation.add(cashPosition);
+        }
+        log.info("==> [PORTFOLIO_SERVICE] Lista final para alocação ({} itens): {}", finalAssetsForAllocation.size(), finalAssetsForAllocation.stream().map(a -> a.getTicker() != null ? a.getTicker() : a.getName()).collect(Collectors.toList()));
+
+
+        BigDecimal totalHeritage = finalAssetsForAllocation.stream()
                 .map(AssetPositionDto::getCurrentValue)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
-        BigDecimal totalInvested = allCurrentAssets.stream()
+        BigDecimal totalInvested = finalAssetsForAllocation.stream()
                 .map(AssetPositionDto::getTotalInvested)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
@@ -113,9 +173,10 @@ public class PortfolioService {
         }
 
         PortfolioSummaryDto summary = new PortfolioSummaryDto(totalHeritage, totalInvested, profitability, yearlyProfitability);
-        Map<String, AllocationNodeDto> percentages = viewService.buildAllocationTree(allCurrentAssets, totalHeritage);
-        Map<String, List<AssetSubCategoryDto>> assetsGrouped = viewService.buildAssetHierarchy(allCurrentAssets, totalHeritage);
-
+        log.info("==> [PORTFOLIO_SERVICE] Chamando viewService para construir a resposta...");
+        Map<String, AllocationNodeDto> percentages = viewService.buildAllocationTree(finalAssetsForAllocation, totalHeritage);
+        Map<String, List<AssetSubCategoryDto>> assetsGrouped = viewService.buildAssetHierarchy(finalAssetsForAllocation, totalHeritage,cashEquivalentIdentifiers);
+        log.info("==> [PORTFOLIO_SERVICE] Cálculo do dashboard concluído.");
         return new PortfolioDashboardDto(summary, percentages, assetsGrouped);
     }
 

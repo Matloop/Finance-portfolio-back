@@ -21,4 +21,5 @@ public class AssetTableRowDto {
     private BigDecimal profitability;
     private BigDecimal portfolioPercentage;
     AssetType assetType;
+    boolean isTreatedAsCash;
 }
