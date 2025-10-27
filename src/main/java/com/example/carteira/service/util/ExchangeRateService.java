@@ -19,9 +19,8 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 @Service
 public class ExchangeRateService {
@@ -29,7 +28,6 @@ public class ExchangeRateService {
     private static final Logger logger = LoggerFactory.getLogger(ExchangeRateService.class);
     private static final String EXCHANGE_RATE_URL = "https://finance.yahoo.com/quote/USDBRL=X/";
     private static final String USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/94.0.4606.81 Safari/537.36";
-    private final Map<LocalDate, BigDecimal> historicalUsdBrlRateCache = new ConcurrentHashMap<>();
     private final WebClient yahooChartWebClient;
     private static final String CURRENT_RATE_CACHE_KEY = "exchange-rate";
     private final RedisTemplate<String, String> redisTemplate;
@@ -44,6 +42,10 @@ public class ExchangeRateService {
      * Busca a taxa de câmbio atual USD -> BRL via web scraping.
      */
     public Mono<BigDecimal> fetchUsdToBrlRate() {
+        Object exchangeValue = redisTemplate.opsForValue().get(CURRENT_RATE_CACHE_KEY);
+        if (exchangeValue != null) {
+            return Mono.just(new BigDecimal(exchangeValue.toString()));
+        }
         return Mono.fromCallable(() -> {
                     try {
                         logger.info("Buscando taxa de câmbio USD -> BRL via web scraping...");
@@ -58,12 +60,16 @@ public class ExchangeRateService {
                         Element priceElement = doc.selectFirst("[data-testid=\"quote-hdr\"] [data-testid=\"qsp-price\"]");
                         if (priceElement != null) {
                             String priceText = priceElement.text().replace(",", ".");
+
                             return new BigDecimal(priceText);
                         }
                         return null;
                     } catch (Exception e) {
                         throw new RuntimeException("Falha ao fazer scraping da taxa de câmbio: " + e.getMessage(), e);
                     }
+                })
+                .doOnNext(rate -> {
+                    redisTemplate.opsForValue().set(CURRENT_RATE_CACHE_KEY, rate.toPlainString(), 1, TimeUnit.HOURS);
                 })
                 .filter(Objects::nonNull)
                 .subscribeOn(Schedulers.boundedElastic())
@@ -75,10 +81,12 @@ public class ExchangeRateService {
      * Busca a taxa de câmbio histórica USD -> BRL para uma data específica.
      */
     public Mono<BigDecimal> fetchHistoricalUsdToBrlRate(LocalDate date) {
-        if (historicalUsdBrlRateCache.containsKey(date)) {
-            logger.debug("💾 [Câmbio Histórico Cache] Usando preço de câmbio de: {}", date);
-            return Mono.just(historicalUsdBrlRateCache.get(date));
+        String dynamicKey = HISTORICAL_VALUES_CACHE_KEY + ":" + date;
+        Object historicalExchangeRate = redisTemplate.opsForValue().get(dynamicKey);
+        if (historicalExchangeRate != null) {
+            return Mono.just(new BigDecimal(historicalExchangeRate.toString()));
         }
+
         logger.info("Buscando taxa de c�mbio hist�rica para a data {}", date);
         final String ticker = "USDBRL=X";
 
@@ -89,10 +97,8 @@ public class ExchangeRateService {
                         .queryParam("interval", "1d")
                         .build())
                 .retrieve()
-                // --- CORREÇÃO: Usa o DTO público e compartilhado ---
                 .bodyToMono(YahooChartResponseDto.class)
                 .map(response -> {
-                    // --- CORREÇÃO: Navega na hierarquia correta dos DTOs ---
                     if (response != null && response.chart() != null && !response.chart().result().isEmpty()) {
                         ChartDataDto data = response.chart().result().get(0);
                         if (data != null && data.timestamp() != null && data.indicators() != null && !data.indicators().quote().isEmpty()) {
@@ -115,7 +121,7 @@ public class ExchangeRateService {
                 })
                 .filter(Objects::nonNull)
                 .doOnNext(rate -> {
-                    historicalUsdBrlRateCache.put(date, rate);
+                    redisTemplate.opsForValue().set(dynamicKey, rate.toPlainString());
                     logger.debug("✅ [Câmbio Histórico Cache] Taxa para {} adicionada ao cache: {}", date, rate);
                 })
                 .onErrorResume(e -> {

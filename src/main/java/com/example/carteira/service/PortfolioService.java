@@ -209,10 +209,18 @@ public class PortfolioService {
         }
         dates.add(today);
 
-        List<PortfolioEvolutionPointDto> evolutionPoints = dates.stream()
+        List<PortfolioEvolutionPointDto> evolutionPoints = dates.parallelStream()
                 .map(date -> calculatePortfolioSnapshot(filteredTransactions, date))
                 .collect(Collectors.toList());
-
+        evolutionPoints.sort(Comparator.comparing(dto -> {
+            if ("Hoje".equals(dto.getDate())) return LocalDate.MAX;
+            try {
+                // Converte "MMM/yy" de volta para uma data para ordenação
+                return LocalDate.parse("01/" + dto.getDate(), DateTimeFormatter.ofPattern("dd/MMM/yy", Locale.ENGLISH));
+            } catch (Exception e) {
+                return LocalDate.MIN;
+            }
+        }));
         return new PortfolioEvolutionDto(evolutionPoints);
     }
 
