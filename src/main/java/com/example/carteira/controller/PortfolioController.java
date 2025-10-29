@@ -42,8 +42,18 @@ public class PortfolioController {
         // A chamada ao método principal do serviço está correta.
         return ResponseEntity.ok(portfolioService.getPortfolioDashboardData(user));
     }
-    @GetMapping("/evolution")
-    public ResponseEntity<PortfolioEvolutionDto> getEvolutionData(
+    @GetMapping("/evolution/mwr")
+    public ResponseEntity<PortfolioEvolutionDto> getMWREvolutionData(
+            @RequestParam(required = false) String category,
+            @RequestParam(required = false) String assetType, // Renomeado de subFilter
+            @RequestParam(required = false) String ticker,
+            @AuthenticationPrincipal User user
+    ) {
+        return ResponseEntity.ok(portfolioService.getPortfolioEvolutionData(user, category, assetType, ticker));
+    }
+
+    @GetMapping("/evolution/twr")
+    public ResponseEntity<PortfolioEvolutionDto> getTWREvolutionData(
             @RequestParam(required = false) String category,
             @RequestParam(required = false) String assetType, // Renomeado de subFilter
             @RequestParam(required = false) String ticker,

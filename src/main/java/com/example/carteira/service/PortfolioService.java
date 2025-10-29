@@ -8,7 +8,6 @@ import com.example.carteira.model.dtos.*;
 import com.example.carteira.model.enums.AssetCategory;
 import com.example.carteira.model.enums.AssetType;
 import com.example.carteira.model.enums.Market;
-import com.example.carteira.model.enums.TransactionType;
 import com.example.carteira.repository.CashBalanceRepository;
 import com.example.carteira.repository.FixedIncomeRepository;
 import com.example.carteira.repository.TransactionRepository;
@@ -25,6 +24,8 @@ import java.util.*;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+
+import static com.example.carteira.model.enums.TransactionType.BUY;
 
 @Service
 public class PortfolioService {
@@ -224,6 +225,87 @@ public class PortfolioService {
         return new PortfolioEvolutionDto(evolutionPoints);
     }
 
+    public PortfolioEvolutionDto getPortfolioEvolutionDataTWR(User user, String category, String assetType, String ticker){
+        LocalDate today = LocalDate.now();
+        List<Transaction> allUserAssets = getAllUserAssetsAsTransaction(user);
+
+        // 1. RESPONSABILIDADE ÚNICA: Obter a lista de transações já filtrada.
+        List<Transaction> filteredTransactions = getFilteredTransactions(allUserAssets, category, assetType, ticker);
+
+        if (filteredTransactions.isEmpty()) {
+            return new PortfolioEvolutionDto(Collections.emptyList());
+        }
+
+        Optional<LocalDate> firstTransactionDateOpt = filteredTransactions.stream()
+                .map(Transaction::getTransactionDate)
+                .min(LocalDate::compareTo);
+
+        LocalDate firstTransactionDate = firstTransactionDateOpt.get();
+        LocalDate twelveMonthsAgo = today.minusMonths(12);
+        LocalDate chartStartDate = firstTransactionDate.isAfter(twelveMonthsAgo) ? firstTransactionDate : twelveMonthsAgo;
+
+        Set<LocalDate> dates = new LinkedHashSet<>();
+        dates.add(chartStartDate);
+        LocalDate currentDate = chartStartDate.plusMonths(1).withDayOfMonth(1);
+        while (!currentDate.isAfter(today)) {
+            dates.add(currentDate);
+            currentDate = currentDate.plusMonths(1);
+        }
+        dates.add(today);
+        BigDecimal cumulativePerformanceIndex = BigDecimal.ONE;
+        List<PortfolioEvolutionPointDto> evolutionPoints = new ArrayList<>();
+        List<LocalDate> sortedDates = new ArrayList<>(dates);
+        Collections.sort(sortedDates);
+        LocalDate previousDate = sortedDates.get(0);
+        for(LocalDate date : sortedDates){
+            if(date.isEqual(previousDate) && evolutionPoints.isEmpty()){
+                previousDate = date;
+                PortfolioEvolutionPointDto dtoToReturn = new PortfolioEvolutionPointDto(date.format(DateTimeFormatter.ofPattern("dd/MMM/yy", Locale.ENGLISH)),BigDecimal.valueOf(100),BigDecimal.ZERO);
+                evolutionPoints.add(dtoToReturn);
+                continue;
+            }
+
+            final LocalDate startOfPeriod = previousDate;
+            List<Transaction> transactionsBetweenPeriod = filteredTransactions.stream()
+                    .filter(t -> !t.getTransactionDate().isBefore(startOfPeriod) && t.getTransactionDate().isBefore(date))
+                    .toList();
+            BigDecimal cashFlow = transactionsBetweenPeriod.stream()
+                    .map(t -> {
+                        if(t.getTransactionType() == BUY){
+                            return t.getQuantity().multiply(t.getPricePerUnit());
+                        }
+                        return t.getQuantity().multiply(t.getPricePerUnit()).negate();
+                    })
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            List<Transaction> transactionsBeforePeriod = filteredTransactions.stream()
+                    .filter(t -> t.getTransactionDate().isBefore(startOfPeriod))
+                    .toList();
+
+            List<AssetPositionDto> initialAssets = calculatorService.calculateConsolidatedPortfolio(transactionsBeforePeriod, previousDate);
+            BigDecimal initialValue = initialAssets.stream()
+                    .map(AssetPositionDto::getCurrentValue)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            List<AssetPositionDto> finalAssets = calculatorService.calculateConsolidatedPortfolio(transactionsBeforePeriod, date);
+            BigDecimal finalValue = finalAssets.stream()
+                    .map(AssetPositionDto::getCurrentValue)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+            BigDecimal adjustedInitialValue = initialValue.add(cashFlow);
+            BigDecimal HPR = BigDecimal.ZERO;
+            if(!adjustedInitialValue.equals(BigDecimal.ZERO)){
+                HPR = finalValue.subtract(adjustedInitialValue);
+                HPR = HPR.divide(adjustedInitialValue,8, RoundingMode.HALF_UP);
+            }
+
+            cumulativePerformanceIndex = cumulativePerformanceIndex.multiply(BigDecimal.ONE.add(HPR));
+            PortfolioEvolutionPointDto dtoToReturn = new PortfolioEvolutionPointDto(date.format(DateTimeFormatter.ofPattern("dd/MMM/yy", Locale.ENGLISH)),cumulativePerformanceIndex.multiply(BigDecimal.valueOf(100)),BigDecimal.ZERO);
+            evolutionPoints.add(dtoToReturn);
+            previousDate = date;
+        }
+
+        return new PortfolioEvolutionDto(evolutionPoints);
+    }
+
     public PortfolioEvolutionDto getPortfolioEvolutionData() {
         return getPortfolioEvolutionData(null,null, null,null);
     }
@@ -314,7 +396,7 @@ public class PortfolioService {
         tx.setId(fi.getId()); // Usa o mesmo ID para referência
         tx.setTicker(fi.getName());
         tx.setAssetType(fi.getAssetType());
-        tx.setTransactionType(TransactionType.BUY);
+        tx.setTransactionType(BUY);
         tx.setTransactionDate(fi.getInvestmentDate());
         tx.setQuantity(fi.getInvestedAmount());
         tx.setPricePerUnit(BigDecimal.ONE); // Preço unitário de Renda Fixa é sempre 1
