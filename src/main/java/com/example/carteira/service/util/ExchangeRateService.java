@@ -15,6 +15,7 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
@@ -128,5 +129,24 @@ public class ExchangeRateService {
                     logger.error("Erro ao buscar dados históricos da taxa de câmbio: {}", e.getMessage());
                     return Mono.empty();
                 });
+    }
+
+    public Mono<BigDecimal> convertToUsd(BigDecimal brlValue, LocalDate date) {
+        if (brlValue.compareTo(BigDecimal.ZERO) == 0) {
+            return Mono.just(BigDecimal.ZERO);
+        }
+
+        // Busca a taxa de câmbio histórica (USD -> BRL)
+        return fetchHistoricalUsdToBrlRate(date)
+                .map(usdToBrlRate -> {
+                    if (usdToBrlRate.compareTo(BigDecimal.ZERO) > 0) {
+                        // Converte BRL para USD dividindo pela taxa
+                        return brlValue.divide(usdToBrlRate, 8, RoundingMode.HALF_UP);
+                    }
+                    // Se a taxa for zero, não é possível converter
+                    logger.warn("Taxa de câmbio histórica para {} é zero, não foi possível converter BRL para USD.", date);
+                    return null; // Ou lançar uma exceção
+                })
+                .filter(Objects::nonNull);
     }
 }

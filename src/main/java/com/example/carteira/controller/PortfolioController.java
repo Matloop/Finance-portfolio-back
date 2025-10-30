@@ -59,7 +59,7 @@ public class PortfolioController {
             @RequestParam(required = false) String ticker,
             @AuthenticationPrincipal User user
     ) {
-        return ResponseEntity.ok(portfolioService.getPortfolioEvolutionData(user, category, assetType, ticker));
+        return ResponseEntity.ok(portfolioService.getPortfolioEvolutionDataTWR(user, category, assetType, ticker));
     }
 
     @GetMapping("/invested-details")

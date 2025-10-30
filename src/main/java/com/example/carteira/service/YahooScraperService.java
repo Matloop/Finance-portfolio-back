@@ -109,7 +109,21 @@ public class YahooScraperService implements MarketDataProvider {
                 .switchIfEmpty(Mono.defer(() -> { // 2. Se o cache estiver vazio, busca na web
                     logger.debug("⚠️ [Histórico Redis] Preço para {} em {} não encontrado. Buscando na web...", assetTicker, date);
                     return findCanonicalTicker(asset)
-                            .flatMap(canonicalTicker -> fetchHistoricalPriceFromApi(asset.ticker(), canonicalTicker, date))
+                            .flatMap(canonicalTicker -> {
+
+                                // <<< COLOQUE O LOG AQUI DENTRO >>>
+                                System.out.println(
+                                        "\n--- TENTANDO BUSCAR PREÇO HISTÓRICO ---" +
+                                                "\nTicker Original: " + asset.ticker() +
+                                                "\nTicker Canônico Encontrado: " + canonicalTicker + // A informação crucial
+                                                "\nData: " + date +
+                                                "\n---------------------------------------"
+                                );
+
+                                // A chamada original continua a mesma
+                                return fetchHistoricalPriceFromApi(asset.ticker(), canonicalTicker, date);
+                            })
+
                             .doOnNext(priceData -> { // 3. Se a busca for bem-sucedida, salva no cache Redis
                                 String price = priceData.price().toPlainString();
                                 redisTemplate.opsForHash().put(HISTORICAL_PRICE_CACHE_KEY, fieldKey, price);
@@ -120,6 +134,7 @@ public class YahooScraperService implements MarketDataProvider {
                     logger.error("❌ Erro final ao buscar preço histórico para {}: {}", asset.ticker(), e.getMessage());
                     return Mono.empty();
                 });
+
     }
 
     private Mono<PriceData> fetchHistoricalPriceFromApi(String originalTicker, String canonicalTicker, LocalDate date) {

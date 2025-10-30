@@ -11,6 +11,7 @@ import com.example.carteira.model.enums.Market;
 import com.example.carteira.repository.CashBalanceRepository;
 import com.example.carteira.repository.FixedIncomeRepository;
 import com.example.carteira.repository.TransactionRepository;
+import com.example.carteira.service.util.ExchangeRateService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -42,10 +43,11 @@ public class PortfolioService {
     private final FixedIncomeRepository fixedIncomeRepository;
     private final UserAssetPreferenceService userAssetPreferenceService;
     private final CashBalanceRepository cashBalanceRepository;
+    private final ExchangeRateService exchangeRateService;
 
     public PortfolioService(TransactionRepository transactionRepository,
                             PortfolioCalculatorService calculatorService,
-                            DashboardViewService viewService, FixedIncomeRepository fixedIncomeRepository, UserAssetPreferenceService userAssetPreferenceService, CashBalanceRepository cashBalanceRepository) {
+                            DashboardViewService viewService, FixedIncomeRepository fixedIncomeRepository, UserAssetPreferenceService userAssetPreferenceService, CashBalanceRepository cashBalanceRepository, ExchangeRateService exchangeRateService) {
         this.transactionRepository = transactionRepository;
         this.calculatorService = calculatorService;
         this.viewService = viewService;
@@ -54,6 +56,7 @@ public class PortfolioService {
 
         this.userAssetPreferenceService = userAssetPreferenceService;
         this.cashBalanceRepository = cashBalanceRepository;
+        this.exchangeRateService = exchangeRateService;
     }
 
     private List<Transaction> getFilteredTransactions(List<Transaction> allTransactions, String category, String assetType, String ticker) {
@@ -117,7 +120,6 @@ public class PortfolioService {
             String identifier = asset.getTicker() != null ? asset.getTicker() : asset.getName();
 
             if (cashEquivalentIdentifiers.contains(identifier)) {
-                // Seu log "!!! ENCONTRADO ATIVO DE CAIXA" já está ótimo aqui.
                 System.out.println("!!! ENCONTRADO ATIVO DE CAIXA: " + identifier);
                 cashEquivalentValue = cashEquivalentValue.add(asset.getCurrentValue());
             } else {
@@ -269,6 +271,7 @@ public class PortfolioService {
             List<Transaction> transactionsBetweenPeriod = filteredTransactions.stream()
                     .filter(t -> !t.getTransactionDate().isBefore(startOfPeriod) && t.getTransactionDate().isBefore(date))
                     .toList();
+
             BigDecimal cashFlow = transactionsBetweenPeriod.stream()
                     .map(t -> {
                         if(t.getTransactionType() == BUY){
@@ -285,7 +288,10 @@ public class PortfolioService {
             BigDecimal initialValue = initialAssets.stream()
                     .map(AssetPositionDto::getCurrentValue)
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
-            List<AssetPositionDto> finalAssets = calculatorService.calculateConsolidatedPortfolio(transactionsBeforePeriod, date);
+            List<Transaction> transactionsUpToCurrentDate= filteredTransactions.stream()
+                    .filter(t -> !t.getTransactionDate().isAfter(date))
+                    .toList();
+            List<AssetPositionDto> finalAssets = calculatorService.calculateConsolidatedPortfolio(transactionsUpToCurrentDate, date);
             BigDecimal finalValue = finalAssets.stream()
                     .map(AssetPositionDto::getCurrentValue)
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
@@ -296,6 +302,15 @@ public class PortfolioService {
                 HPR = finalValue.subtract(adjustedInitialValue);
                 HPR = HPR.divide(adjustedInitialValue,8, RoundingMode.HALF_UP);
             }
+            System.out.println("--- PERÍODO DE " + previousDate + " ATÉ " + date + " ---");
+            System.out.println("Valor Inicial (calculado para " + previousDate + "): " + initialValue);
+            System.out.println("Valor Final (calculado para " + date + "): " + finalValue);
+            System.out.println("Fluxo de Caixa no período: " + cashFlow);
+            System.out.println("HPR (Rentabilidade do Período): " + HPR.multiply(BigDecimal.valueOf(100)) + "%");
+            System.out.println("Índice Cumulativo ANTES: " + cumulativePerformanceIndex);
+            System.out.println("Índice Cumulativo DEPOIS: " + cumulativePerformanceIndex);
+            System.out.println("-------------------------------------------------");
+
 
             cumulativePerformanceIndex = cumulativePerformanceIndex.multiply(BigDecimal.ONE.add(HPR));
             PortfolioEvolutionPointDto dtoToReturn = new PortfolioEvolutionPointDto(date.format(DateTimeFormatter.ofPattern("dd/MMM/yy", Locale.ENGLISH)),cumulativePerformanceIndex.multiply(BigDecimal.valueOf(100)),BigDecimal.ZERO);
