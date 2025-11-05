@@ -2,10 +2,14 @@ package com.example.carteira.controller;
 
 import com.example.carteira.model.Transaction;
 import com.example.carteira.model.User;
-import com.example.carteira.model.dtos.*;
+import com.example.carteira.model.dtos.InvestedDetailDto;
+import com.example.carteira.model.dtos.PortfolioDashboardDto;
+import com.example.carteira.model.dtos.PortfolioEvolutionDto;
+import com.example.carteira.model.dtos.TagAssetRequestDto;
 import com.example.carteira.model.enums.AssetType;
 import com.example.carteira.service.MarketDataService;
 import com.example.carteira.service.PortfolioService;
+import com.example.carteira.service.UserAssetPreferenceService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
@@ -18,10 +22,12 @@ import java.util.Map;
 public class PortfolioController {
     private final PortfolioService portfolioService;
     private final MarketDataService marketDataService;
+    private final UserAssetPreferenceService userAssetPreferenceService;
 
-    public PortfolioController(PortfolioService portfolioService, MarketDataService marketDataService) {
+    public PortfolioController(PortfolioService portfolioService, MarketDataService marketDataService, UserAssetPreferenceService userAssetPreferenceService) {
         this.portfolioService = portfolioService;
         this.marketDataService = marketDataService;
+        this.userAssetPreferenceService = userAssetPreferenceService;
     }
 
 
@@ -36,14 +42,24 @@ public class PortfolioController {
         // A chamada ao método principal do serviço está correta.
         return ResponseEntity.ok(portfolioService.getPortfolioDashboardData(user));
     }
-    @GetMapping("/evolution")
-    public ResponseEntity<PortfolioEvolutionDto> getEvolutionData(
+    @GetMapping("/evolution/mwr")
+    public ResponseEntity<PortfolioEvolutionDto> getMWREvolutionData(
             @RequestParam(required = false) String category,
             @RequestParam(required = false) String assetType, // Renomeado de subFilter
             @RequestParam(required = false) String ticker,
             @AuthenticationPrincipal User user
     ) {
         return ResponseEntity.ok(portfolioService.getPortfolioEvolutionData(user, category, assetType, ticker));
+    }
+
+    @GetMapping("/evolution/twr")
+    public ResponseEntity<PortfolioEvolutionDto> getTWREvolutionData(
+            @RequestParam(required = false) String category,
+            @RequestParam(required = false) String assetType, // Renomeado de subFilter
+            @RequestParam(required = false) String ticker,
+            @AuthenticationPrincipal User user
+    ) {
+        return ResponseEntity.ok(portfolioService.getPortfolioEvolutionDataTWR(user, category, assetType, ticker));
     }
 
     @GetMapping("/invested-details")
@@ -70,6 +86,12 @@ public class PortfolioController {
 
         portfolioService.deleteAsset(user, identifier, assetType);
         return ResponseEntity.noContent().build(); // Retorna 204 No Content, o padrão para DELETE
+    }
+
+    @PostMapping("/preferences/tag-asset")
+    public ResponseEntity<Void> saveUserCashPreference(@AuthenticationPrincipal User user, @RequestBody TagAssetRequestDto dto){
+        userAssetPreferenceService.tagAssetAsCash(user, dto.getAssetIdentifier(), dto.isCash());
+        return ResponseEntity.ok().build();
     }
 
 

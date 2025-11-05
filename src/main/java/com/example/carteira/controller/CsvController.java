@@ -4,6 +4,7 @@ package com.example.carteira.controller;
 import com.example.carteira.model.User;
 import com.example.carteira.model.dtos.ImportSummaryDto;
 import com.example.carteira.service.CsvService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.InputStreamResource;
 import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
@@ -20,12 +21,12 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/csv") // Um novo caminho base para manter a organização
 public class CsvController {
-
     private final CsvService csvService;
 
     public CsvController(CsvService csvService) {
         this.csvService = csvService;
     }
+
 
     /**
      * Endpoint para exportar todas as transações da carteira em um arquivo CSV.

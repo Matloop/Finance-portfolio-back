@@ -4,23 +4,20 @@ import com.example.carteira.model.dtos.AllocationNodeDto;
 import com.example.carteira.model.dtos.AssetPositionDto;
 import com.example.carteira.model.dtos.AssetSubCategoryDto;
 import com.example.carteira.model.dtos.AssetTableRowDto;
-import com.example.carteira.model.enums.AssetCategory;
-import com.example.carteira.model.enums.AssetType;
-import com.example.carteira.model.enums.Market;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.util.Comparator;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @Service
 public class DashboardViewService {
+        private static final Logger log = LoggerFactory.getLogger(DashboardViewService.class);
         //Organiza ativos para exibição no front com base no valor
-        public Map<String, List<AssetSubCategoryDto>> buildAssetHierarchy(List<AssetPositionDto> allAssets, BigDecimal totalHeritage) {
+        public Map<String, List<AssetSubCategoryDto>> buildAssetHierarchy(List<AssetPositionDto> allAssets, BigDecimal totalHeritage, Set<String> cashEquivalentIdentifiers) {
             //Agrupa por tipo de ativo
             Map<String, Map<String, List<AssetPositionDto>>> groupedMap = allAssets.stream()
                     .collect(Collectors.groupingBy(
@@ -40,6 +37,8 @@ public class DashboardViewService {
 
                             List<AssetTableRowDto> assetTableRows = assetsInSubCategory.stream()
                                     .map(asset -> {
+                                        String identifier = asset.getTicker() != null ? asset.getTicker() : asset.getName();
+                                        boolean isCash = cashEquivalentIdentifiers.contains(identifier);
                                         BigDecimal portfolioPercentage = totalHeritage.compareTo(BigDecimal.ZERO) > 0 ?
                                                 asset.getCurrentValue()
                                                         .divide(totalHeritage, 4, RoundingMode.HALF_UP)
@@ -54,7 +53,8 @@ public class DashboardViewService {
                                                 asset.getCurrentValue(),
                                                 asset.getProfitability(),
                                                 portfolioPercentage,
-                                                asset.getAssetType()
+                                                asset.getAssetType(),
+                                                isCash
                                         );
                                     })
                                     .sorted(Comparator.comparing(AssetTableRowDto::getCurrentValue).reversed())
@@ -70,9 +70,11 @@ public class DashboardViewService {
     //Organiza ativos para exibição no front com base na porcentagem
     public Map<String, AllocationNodeDto> buildAllocationTree(List<AssetPositionDto> allAssets, BigDecimal totalHeritage) {
         if (totalHeritage.compareTo(BigDecimal.ZERO) <= 0) return Map.of();
+        log.info("==> [VIEW_SERVICE] Agrupando para o Gráfico de Pizza...");
         //Organiza por tipo de ativo
         Map<String, List<AssetPositionDto>> byCategory = allAssets.stream()
                 .collect(Collectors.groupingBy(AssetPositionDto::getDisplayCategoryKey));
+        log.info("==> [VIEW_SERVICE] Categorias de topo encontradas para o gráfico: {}", byCategory.keySet());
 
         return byCategory.entrySet().stream().collect(Collectors.toMap(
                 Map.Entry::getKey,
@@ -94,8 +96,11 @@ public class DashboardViewService {
     }
 
     private Map<String, AllocationNodeDto> buildChildrenForCategory(String category, List<AssetPositionDto> assets, BigDecimal categoryTotal) {
+        if ("Caixa".equals(category)) {
+            return Collections.emptyMap();
+        }
             //Já que crypto não tem subcategoria, só retorna por ativos
-        if ("crypto".equals(category)) {
+        if ("Cripto".equalsIgnoreCase(category)) {
             Map<String, BigDecimal> aggregatedValues = assets.stream()
                     .collect(Collectors.groupingBy(
                             AssetPositionDto::getTicker,
@@ -111,8 +116,10 @@ public class DashboardViewService {
                     ));
         }
 
+
+
         Map<String, List<AssetPositionDto>> byAssetType = assets.stream()
-                .collect(Collectors.groupingBy(asset -> asset.getAssetType().name().toLowerCase()));
+                .collect(Collectors.groupingBy(asset -> asset.getAssetType().getFriendlyName()));
 
         return byAssetType.entrySet().stream().collect(Collectors.toMap(
                 Map.Entry::getKey,

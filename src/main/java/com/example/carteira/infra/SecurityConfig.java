@@ -47,12 +47,18 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
+
                 .csrf(csrf -> csrf.disable())
                 .cors(Customizer.withDefaults())
+                .headers(headers -> headers
+                        .frameOptions(frameOptions -> frameOptions
+                                .sameOrigin() // Permite frames da mesma origem, ou .disable() para desabilitar totalmente
+                        )
+                )
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
                 .authorizeHttpRequests(authorize -> authorize
                         // Permite o acesso aos endpoints de login/erro do Spring OAuth2
-                        .requestMatchers("/oauth2/**", "/login/**", "/error").permitAll()
+                        .requestMatchers("/oauth2/**", "/login/**", "/error", "/h2-console/**").permitAll()
                         .requestMatchers("/api/market-data/search/**").permitAll()
                         // Protege todas as outras rotas /api
                         .requestMatchers("/api/**").authenticated()

@@ -32,6 +32,7 @@ public class MarketDataService {
     private static final Logger logger = LoggerFactory.getLogger(MarketDataService.class);
     // Chave principal para o Hash no Redis
     private static final String PRICE_CACHE_KEY = "market-prices";
+    private static final String HISTORICAL_PRICE_CACHE_KEY = "historical-prices";
 
     private final TransactionRepository transactionRepository;
     private final List<MarketDataProvider> providers;
@@ -89,6 +90,7 @@ public class MarketDataService {
         String cleanedTerm = term.replace("&", "");
 
         List<Flux<AssetSearchResultDto>> searchFluxes = providers.stream()
+                .filter(provider -> !provider.supports(AssetType.DOLLAR))
                 .map(provider -> provider.search(cleanedTerm)
                         .onErrorResume(e -> {
                             logger.error("Erro na busca do provedor {}: {}",
@@ -198,22 +200,48 @@ public class MarketDataService {
     }
 
     public Mono<PriceData> getHistoricalPriceWithFallback(AssetToFetch asset, LocalDate date) {
-        List<MarketDataProvider> availableProviders = findProvidersFor(asset.assetType());
-        if (availableProviders.isEmpty()) {
-            logger.warn("[Histórico] Nenhum provedor encontrado para o tipo de ativo: {}", asset.assetType());
-            return Mono.empty();
-        }
+        String cacheFieldKey = asset.ticker().toUpperCase() + ":" + date.toString();
 
-        Flux<PriceData> priceFlux = Flux.empty();
-        for (MarketDataProvider provider : availableProviders) {
-            Flux<PriceData> providerFlux = Flux.defer(() -> {
-                logger.info("[Histórico] Tentando provedor '{}' para {} em {}",
-                        provider.getClass().getSimpleName(), asset.ticker(), date);
-                return provider.fetchHistoricalPrice(asset, date).flux();
-            });
-            priceFlux = priceFlux.switchIfEmpty(providerFlux);
-        }
-        return priceFlux.next();
+        return Mono.defer(() -> {
+            Object cachedValue = redisTemplate.opsForHash().get(HISTORICAL_PRICE_CACHE_KEY,cacheFieldKey);
+            if(cachedValue != null){
+                try{
+                    BigDecimal price = new BigDecimal(cachedValue.toString());
+                    logger.info("💾 [Histórico] Preço recuperado do cache Redis para {}: {}", cacheFieldKey, price);
+                    return Mono.just(new PriceData(asset.ticker(),price));
+                } catch (NumberFormatException e){
+                    logger.error("Erro ao converter valor do cache histórico: '{}'", cachedValue);
+                    return Mono.empty();
+                }
+            }
+
+            return Mono.empty();
+        })
+                .switchIfEmpty(Mono.defer(() -> {
+                    List<MarketDataProvider> availableProviders = findProvidersFor(asset.assetType());
+                    if (availableProviders.isEmpty()) {
+                        logger.warn("[Histórico] Nenhum provedor encontrado para o tipo de ativo: {}", asset.assetType());
+                        return Mono.empty();
+                    }
+
+                    Flux<PriceData> priceFlux = Flux.empty();
+                    for (MarketDataProvider provider : availableProviders) {
+                        Flux<PriceData> providerFlux = Flux.defer(() -> {
+                            logger.info("[Histórico] Tentando provedor '{}' para {} em {}",
+                                    provider.getClass().getSimpleName(), asset.ticker(), date);
+                            return provider.fetchHistoricalPrice(asset, date).flux();
+                        });
+                        priceFlux = priceFlux.switchIfEmpty(providerFlux);
+                    }
+
+                    return priceFlux.next()
+                            .doOnSuccess(priceData -> {
+                                if (priceData != null) {
+                                    redisTemplate.opsForHash().put(HISTORICAL_PRICE_CACHE_KEY, cacheFieldKey, priceData.price().toPlainString());
+                                    logger.info("💾 [Histórico] Cache Redis atualizado para {}: {}", cacheFieldKey, priceData.price());
+                                }
+                            });
+                }));
     }
 
     private void updatePricesForTransactions(List<Transaction> transactions, String logContext) {
