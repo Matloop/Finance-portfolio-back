@@ -1,0 +1,12 @@
+---
+import Layout from '../layouts/Layout.astro';
+
+import DashboardPage from '../components/DashboardPage.jsx';
+---
+
+<Layout title="Meu Dashboard - CarteiraPro">
+    <main>
+        <!-- Renderize o componente wrapper que contém o AuthProvider -->
+        <DashboardPage client:only="react" />
+    </main>
+</Layout>

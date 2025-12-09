@@ -1,0 +1,294 @@
+/* src/components/Dashboard/Dashboard.module.css */
+
+.dashboardContainer {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1.5rem;
+    margin-bottom: 1.5rem;
+}
+
+@media (min-width: 1024px) {
+    .dashboardContainer {
+        grid-template-columns: 1fr 1fr;
+    }
+}
+
+.chartCard {
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    overflow: hidden;
+}
+
+.chartCard::after {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 4px;
+    background: linear-gradient(90deg, var(--primary-blue) 0%, #8b5cf6 50%, #ec4899 100%);
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.chartCard:hover::after {
+    opacity: 1;
+}
+
+.chartHeader {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1.5rem;
+}
+
+.chartWrapper {
+    flex-grow: 1;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 400px;
+    position: relative;
+}
+
+.chartTitle {
+    margin: 0;
+    font-size: 1.125rem;
+    font-weight: 700;
+}
+
+.chartTitleWrapper {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.backButton {
+    background: var(--primary-blue);
+    color: var(--background-secondary);
+    border: none;
+    padding: 0.5rem 1rem;
+    border-radius: 9999px;
+    cursor: pointer;
+    font-size: 0.875rem;
+    font-weight: 600;
+    transition: all 0.2s;
+}
+
+.backButton:hover {
+    transform: translateY(-2px);
+    opacity: 0.9;
+}
+
+.annualVariation {
+    font-size: 0.8rem;
+    font-weight: 700;
+    padding: 0.2rem 0.5rem;
+    border-radius: 0.5rem;
+    line-height: 1;
+}
+
+.profitPositive {
+    background-color: rgba(74, 222, 128, 0.1);
+    color: var(--success-green);
+}
+
+.profitNegative {
+    background-color: rgba(248, 113, 113, 0.1);
+    color: var(--danger-red);
+}
+
+.evolutionFilters {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.evolutionFilters select {
+    background-color: var(--background-tertiary);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 0.375rem;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.8rem;
+}
+
+
+/* Estilos para mensagens de "sem dados" */
+.infoMessage {
+    padding: 1rem;
+    border-radius: 0.375rem;
+    font-weight: 500;
+    text-align: center;
+    background-color: var(--background-tertiary);
+    color: var(--text-secondary);
+}
+
+/* Estilos para texto de "carregando" (sem fundo) */
+.loadingText {
+    font-weight: 500;
+    text-align: center;
+    color: var(--text-muted);
+}
+/* =============================== */
+
+
+.customTooltip {
+    background: var(--background-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 0.75rem;
+    padding: 1rem;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+}
+
+.tooltipDate {
+    font-weight: 700;
+    margin: 0 0 0.75rem 0;
+    color: var(--text-primary);
+    border-bottom: 2px solid var(--border-color);
+    padding-bottom: 0.5rem;
+}
+
+.tooltipItem {
+    margin: 0.5rem 0;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+}
+
+.tooltipItem::before {
+    content: '';
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    margin-right: 0.5rem;
+    display: inline-block;
+}
+
+.valorAplicado { color: var(--primary-blue); }
+.valorAplicado::before { background-color: var(--primary-blue); }
+
+.ganhoCapital { color: var(--success-green); }
+.ganhoCapital::before { background-color: var(--success-green); }
+
+.patrimonio {
+    color: var(--text-secondary);
+    font-weight: 700;
+    margin-top: 0.75rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--border-color);
+}
+.patrimonio::before { background: linear-gradient(135deg, var(--primary-blue), var(--success-green)); }
+/* src/components/DashboardApp/DashboardApp.module.css */
+.appContainer {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 1rem 2rem;
+  min-height: 100vh;
+}
+
+.appHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 2rem;
+  padding-bottom: 1rem;
+  border-bottom: 2px solid var(--border-color);
+  flex-wrap: wrap;
+  gap: 1.5rem;
+}
+
+.appHeader h1 {
+  font-size: 1.875rem;
+  font-weight: 700;
+  margin-right: auto;
+}
+
+.headerActions {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+
+.logoutButton {
+    background-color: var(--text-muted);
+    color: var(--background-secondary);
+    padding: 0.5rem 1rem;
+    border: none;
+    border-radius: 0.375rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.logoutButton:hover {
+    background-color: var(--text-secondary);
+}
+
+.importSummary {
+  padding: 1rem 1.5rem;
+  border-radius: 0.5rem;
+  margin-bottom: 1.5rem;
+  border-left: 4px solid;
+}
+.importSummary.success {
+  background-color: #d1fae5;
+  border-color: var(--success-green);
+  color: #065f46;
+}
+.dark .importSummary.success {
+  background-color: #064e3b;
+  color: #d1fae5;
+}
+
+.importSummary.error {
+  background-color: #fee2e2;
+  border-color: var(--danger-red);
+  color: #991b1b;
+}
+.dark .importSummary.error {
+    background-color: #7f1d1d;
+    color: #fee2e2;
+}
+.toggleButtonGroup {
+  display: flex;
+  background-color: #e5e7eb; /* Cor de fundo do grupo */
+  border-radius: 8px;
+  padding: 4px;
+  margin-left: 1rem; /* Espaçamento do título */
+}
+
+/* Estilo para o botão do seletor */
+.toggleButton {
+  padding: 6px 12px;
+  border: none;
+  background-color: transparent;
+  color: #4b5563; /* Cor do texto inativo */
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background-color 0.2s ease, color 0.2s ease;
+  font-size: 0.8rem;
+}
+
+/* Estilo para o botão ativo */
+.toggleButton.active {
+  background-color: #ffffff; /* Fundo branco para o ativo */
+  color: #1e3a8a; /* Cor do texto ativo */
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+/* Ajustes para o modo escuro */
+:global(.dark) .toggleButtonGroup {
+  background-color: #374151; /* Fundo mais escuro */
+}
+
+:global(.dark) .toggleButton {
+  color: #d1d5db; /* Texto inativo mais claro */
+}
+
+:global(.dark) .toggleButton.active {
+  background-color: #4f46e5; /* Fundo ativo mais vibrante */
+  color: #ffffff; /* Texto ativo branco */
+}

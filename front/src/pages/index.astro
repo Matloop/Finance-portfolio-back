@@ -1,0 +1,12 @@
+---
+import Layout from '../layouts/Layout.astro';
+import LandingPage from '../components/LandingPage/LandingPage.jsx';
+import dashboardImage from '../assets/dashboard-placeholder.png';
+---
+
+<Layout title="CarteiraPro - Controle Total dos Seus Investimentos">
+	
+	<LandingPage client:only="react" dashboardImage={dashboardImage.src} />
+	
+</Layout>
+

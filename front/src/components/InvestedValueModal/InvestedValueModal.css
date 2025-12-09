@@ -1,0 +1,91 @@
+/* src/components/InvestedValueModal/investedValueModal.css */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(15, 23, 42, 0.7);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+  backdrop-filter: blur(4px);
+  animation: fadeIn 0.3s ease;
+}
+
+.modal-content {
+  padding: 2rem;
+  border-radius: 0.75rem;
+  width: 90%;
+  max-width: 600px;
+  position: relative;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.close-button {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  cursor: pointer;
+  line-height: 1;
+  transition: color 0.2s;
+}
+
+.modal-content h2 {
+  margin-top: 0;
+  margin-bottom: 1.5rem;
+  font-size: 1.5rem;
+  font-weight: 600;
+  text-align: center;
+}
+
+.invested-list {
+  flex-grow: 1;
+  overflow-y: auto;
+  padding-right: 1rem; /* Espaço para a barra de rolagem */
+}
+
+.invested-list-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 0.5rem;
+  border-bottom: 1px solid;
+}
+
+.invested-list-item:last-child {
+  border-bottom: none;
+}
+
+.invested-asset-name {
+  font-weight: 600;
+}
+
+.invested-asset-value {
+  font-weight: 500;
+}
+
+/* --- Cores Light Mode --- */
+.modal-content { background-color: #ffffff; color: #1f2937; }
+.close-button { color: #9ca3af; }
+.close-button:hover { color: #111827; }
+.invested-list-item { border-color: #e5e7eb; }
+.invested-asset-value { color: #374151; }
+
+/* --- Cores Dark Mode --- */
+.dark .modal-content { background-color: #1e293b; color: #e2e8f0; }
+.dark .close-button { color: #64748b; }
+.dark .close-button:hover { color: #cbd5e1; }
+.dark .invested-list-item { border-color: #334155; }
+.dark .invested-asset-value { color: #cbd5e1; }
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
